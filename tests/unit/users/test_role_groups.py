@@ -13,6 +13,7 @@ from octop.infra.db.services import RepoBundle
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, GroupAccess
 from octop.infra.users.role_groups import (
+    _synced_group_for_role,
     disable_role_group,
     ensure_role_group,
     resolve_department_group,
@@ -129,6 +130,14 @@ def test_resolve_department_group_rejects_builtin_and_unknown(repos: RepoBundle)
     with pytest.raises(OctopError) as unknown_exc:
         resolve_department_group(repos, role_id="ghost")
     assert unknown_exc.value.status == 400
+
+
+def test_lazy_lookup_never_projects_builtin_roles(repos: RepoBundle) -> None:
+    # The audience endpoint looks up the caller's group lazily; a built-in
+    # role must resolve to "no group" without creating one.
+    assert _synced_group_for_role(repos, role_id="admin") is None
+    assert _synced_group_for_role(repos, role_id="user") is None
+    assert repos.user_group_repo.list_all() == []
 
 
 def test_department_share_visible_only_to_role_members(repos: RepoBundle) -> None:

@@ -68,6 +68,9 @@ def disable_role_group(repos: RepoBundle, *, role_id: str) -> None:
 
 
 def _synced_group_for_role(repos: RepoBundle, *, role_id: str) -> UserGroupRow | None:
+    if _is_builtin_role(role_id):
+        # Built-in roles never project onto a group.
+        return None
     repo = repos.user_group_repo
     group = repo.get_by_sync_role_id(role_id)
     if group is None:
