@@ -62,12 +62,21 @@ def test_ensure_role_group_renames_in_place(repos: RepoBundle) -> None:
     assert repos.user_group_repo.get_by_name("教务处") is None
 
 
-def test_ensure_role_group_rejects_manual_name_clash(repos: RepoBundle) -> None:
+def test_ensure_role_group_adopts_manual_group_with_same_name(repos: RepoBundle) -> None:
     _role(repos, "jwc", "教务处")
-    repos.user_group_repo.create(name="教务处", description=None)
-    with pytest.raises(OctopError) as excinfo:
-        ensure_role_group(repos, role_id="jwc", role_name="教务处")
-    assert excinfo.value.status == 400
+    manual = repos.user_group_repo.create(name="教务处", description=None)
+    member_id = _user(repos, "maomao", "user")
+    repos.user_group_member_repo.add(manual.user_group_id, member_id)
+
+    adopted = ensure_role_group(repos, role_id="jwc", role_name="教务处")
+
+    # The hand-made group is attached to the role, keeping its id and members.
+    assert adopted.user_group_id == manual.user_group_id
+    assert adopted.sync_role_id == "jwc"
+    assert member_id in repos.user_group_member_repo.user_ids_for_group(
+        manual.user_group_id
+    )
+    assert repos.user_group_repo.get_by_sync_role_id("jwc") is not None
 
 
 def test_sync_user_membership_follows_role(repos: RepoBundle) -> None:

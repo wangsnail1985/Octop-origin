@@ -130,6 +130,14 @@ class UserGroupRepo:
                 (now_ts(), user_group_id),
             )
 
+    def adopt_as_sync_role(self, user_group_id: str, role_id: str) -> None:
+        """Attach an existing (manually created) group to a role template."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE user_group SET sync_role_id = ?, updated_at = ? WHERE user_group_id = ?",
+                (role_id, now_ts(), user_group_id),
+            )
+
     def update(
         self,
         user_group_id: str,

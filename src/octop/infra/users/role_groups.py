@@ -23,8 +23,9 @@ def _is_builtin_role(role_id: str | None) -> bool:
 def ensure_role_group(repos: RepoBundle, *, role_id: str, role_name: str) -> UserGroupRow:
     """Create or rename the user group projected from a role template.
 
-    Idempotent: an existing synced group is renamed in place; a name clash with
-    a manually managed group raises so the caller can surface a 400.
+    Idempotent: an existing synced group is renamed in place. A pre-existing
+    manual group with the same name is adopted (attached to the role) instead
+    of duplicated, so departments created by hand keep their members.
     """
     repo = repos.user_group_repo
     existing = repo.get_by_sync_role_id(role_id)
@@ -36,11 +37,10 @@ def ensure_role_group(repos: RepoBundle, *, role_id: str, role_name: str) -> Use
         return row
     conflict = repo.get_by_name(role_name)
     if conflict is not None:
-        raise OctopError(
-            ErrorCode.FORBIDDEN,
-            "a user group with this role name already exists",
-            status=400,
-        )
+        repo.adopt_as_sync_role(conflict.user_group_id, role_id)
+        row = repo.get(conflict.user_group_id)
+        assert row is not None
+        return row
     return repo.create(
         name=role_name,
         description=f"Synced from role {role_id}",
