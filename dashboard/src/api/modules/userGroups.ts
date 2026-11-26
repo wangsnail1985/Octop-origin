@@ -41,11 +41,22 @@ export interface UserGroupWrite {
   avatar_icon?: string | null;
 }
 
-export type ResourceVisibilityMode = "all" | "groups" | "owner";
+export type ResourceVisibilityMode = "all" | "groups" | "owner" | "department";
+
+/** Resources whose API accepts the picker types except the KB-only department mode. */
+export type SharedVisibilityMode = Exclude<ResourceVisibilityMode, "department">;
+
+export function isSharedVisibility(
+  value: ResourceVisibilityMode,
+): value is SharedVisibilityMode {
+  return value !== "department";
+}
 
 export interface SharingAudience {
   user_count: number;
   group_count: number;
+  /** Group projected from the caller's role, when it exists (department share). */
+  my_sync_group_id?: string | null;
 }
 
 export const userGroupsApi = {

@@ -30,7 +30,8 @@ import {
   ResourceVisibilityGate,
 } from "../../../components/ResourceVisibilityFields";
 import { TextAssistBar } from "../../../components/TextAssistBar";
-import type { ResourceVisibilityMode } from "../../../api/modules/userGroups";
+import type { SharedVisibilityMode } from "../../../api/modules/userGroups";
+import { isSharedVisibility } from "../../../api/modules/userGroups";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useIsMobile } from "../../../hooks/useIsMobile";
 import {
@@ -179,12 +180,12 @@ function buildCredentials(
 
 function visibilityFromDetail(
   detail: {
-    visibility?: ResourceVisibilityMode | null;
+    visibility?: SharedVisibilityMode | null;
     shared?: boolean;
     group_ids?: string[] | null;
   } | null,
 ): {
-  visibility: ResourceVisibilityMode;
+  visibility: SharedVisibilityMode;
   groupIds: string[];
 } {
   if (!detail) return { visibility: "owner", groupIds: [] };
@@ -198,7 +199,7 @@ function visibilityFromDetail(
 }
 
 function visibilityFields(
-  visibility: ResourceVisibilityMode,
+  visibility: SharedVisibilityMode,
   groupIds: string[],
 ) {
   return {
@@ -412,7 +413,7 @@ function ConnectorConfigDrawer({
     string | null
   >(null);
   const [connectorVisibility, setConnectorVisibility] =
-    useState<ResourceVisibilityMode>("owner");
+    useState<SharedVisibilityMode>("owner");
   const [connectorGroupIds, setConnectorGroupIds] = useState<string[]>([]);
 
   const hasStoredCredentials = Boolean(
@@ -2283,7 +2284,9 @@ function ConnectorConfigDrawer({
                   visibility={connectorVisibility}
                   groupIds={connectorGroupIds}
                   onChange={(next) => {
-                    setConnectorVisibility(next.visibility);
+                    if (isSharedVisibility(next.visibility)) {
+                      setConnectorVisibility(next.visibility);
+                    }
                     setConnectorGroupIds(
                       next.visibility === "groups" ? next.groupIds : [],
                     );

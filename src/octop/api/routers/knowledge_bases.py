@@ -69,6 +69,7 @@ from octop.infra.knowledge.service import (
 from octop.infra.server import OctopServer
 from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, GroupAccess
 from octop.infra.users.identity import User
+from octop.infra.users.role_groups import resolve_department_group
 from octop.infra.utils.locale import resolve_request_locale
 
 router = APIRouter(prefix="/knowledge-bases")
@@ -199,7 +200,7 @@ class CreateBaseBody(BaseModel):
     description: str = Field(default="", max_length=2000)
     default_open: bool = False
     shared: bool = False
-    visibility: Literal["all", "groups", "owner"] | None = None
+    visibility: Literal["all", "groups", "owner", "department"] | None = None
     group_ids: list[str] | None = None
     icon_name: str = Field(default="", max_length=64)
     icon_url: str = Field(default="", max_length=2048)
@@ -237,7 +238,7 @@ class UpdateBaseBody(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     default_open: bool | None = None
     shared: bool | None = None
-    visibility: Literal["all", "groups", "owner"] | None = None
+    visibility: Literal["all", "groups", "owner", "department"] | None = None
     group_ids: list[str] | None = None
     icon_name: str | None = Field(default=None, max_length=64)
     icon_url: str | None = Field(default=None, max_length=2048)
@@ -353,6 +354,31 @@ def _base_payload(server: OctopServer, row: Any) -> dict[str, Any]:
 
 def _is_admin(user: User) -> bool:
     return bool(user.is_admin)
+
+
+def _resolve_visibility(
+    server: OctopServer,
+    *,
+    visibility: str,
+    group_ids: list[str] | None,
+    owner_user_id: int,
+) -> tuple[str, list[str] | None]:
+    """Map ``department`` onto the owner's role group (persisted as ``groups``).
+
+    Callers only invoke this for a non-null ``visibility``; any other value
+    passes through unchanged.
+    """
+    if visibility != "department":
+        return visibility, group_ids
+    services = server.services
+    repos = getattr(services, "repos", None) if services is not None else None
+    user_manager = server.user_manager
+    if repos is None or user_manager is None:
+        raise OctopError(ErrorCode.FORBIDDEN, "department share is unavailable", status=400)
+    owner = user_manager.get_row(owner_user_id)
+    role_id = str(getattr(owner, "role", "") or "") if owner is not None else ""
+    group = resolve_department_group(repos, role_id=role_id or None)
+    return "groups", [group.user_group_id]
 
 
 def _max_upload_mb(server: OctopServer) -> int:
@@ -778,8 +804,18 @@ async def create_base(
     try:
         _require_usable(server, request)
         access = _group_access(server)
-        if body.visibility is not None and access is not None:
-            access.validate_visibility(body.visibility, body.group_ids)
+        if body.visibility is None:
+            visibility: str | None = None
+            group_ids = body.group_ids
+        else:
+            visibility, group_ids = _resolve_visibility(
+                server,
+                visibility=body.visibility,
+                group_ids=body.group_ids,
+                owner_user_id=user.id,
+            )
+        if visibility is not None and access is not None:
+            access.validate_visibility(visibility, group_ids)
         base = _knowledge_service(server).create_base(
             owner_user_id=user.id,
             name=body.name.strip(),
@@ -787,21 +823,21 @@ async def create_base(
             default_open=body.default_open,
             shared=(
                 False
-                if body.visibility == "owner"
+                if visibility == "owner"
                 else True
-                if body.visibility in {"all", "groups"}
+                if visibility in {"all", "groups"}
                 else body.shared
             ),
             icon_name=body.icon_name.strip(),
             icon_url=body.icon_url.strip(),
             max_documents=body.max_documents if body.max_documents is not None else MAX_DOCS_PER_KB,
         )
-        if body.visibility is not None and access is not None:
+        if visibility is not None and access is not None:
             access.set_visibility(
                 RESOURCE_KNOWLEDGE_BASE,
                 base.id,
-                body.visibility,
-                body.group_ids,
+                visibility,
+                group_ids,
             )
         return _base_payload(server, base)
     except Exception as exc:
@@ -855,12 +891,25 @@ async def update_base(
 ) -> dict[str, Any]:
     try:
         access = _group_access(server)
-        if body.visibility is not None and access is not None:
-            access.validate_visibility(body.visibility, body.group_ids)
+        services = server.services
+        repos = getattr(services, "repos", None) if services is not None else None
+        existing = repos.knowledge_repo.get_base(kb_id) if repos is not None else None
+        if body.visibility is None:
+            visibility: str | None = None
+            group_ids = body.group_ids
+        else:
+            visibility, group_ids = _resolve_visibility(
+                server,
+                visibility=body.visibility,
+                group_ids=body.group_ids,
+                owner_user_id=(int(existing.owner_user_id) if existing is not None else user.id),
+            )
+        if visibility is not None and access is not None:
+            access.validate_visibility(visibility, group_ids)
         shared = body.shared
-        if body.visibility == "owner":
+        if visibility == "owner":
             shared = False
-        elif body.visibility in {"all", "groups"}:
+        elif visibility in {"all", "groups"}:
             shared = True
         updated = _knowledge_service(server).update_base(
             kb_id,
@@ -874,12 +923,12 @@ async def update_base(
             max_documents=body.max_documents,
             is_admin=_is_admin(user),
         )
-        if body.visibility is not None and access is not None:
+        if visibility is not None and access is not None:
             access.set_visibility(
                 RESOURCE_KNOWLEDGE_BASE,
                 kb_id,
-                body.visibility,
-                body.group_ids,
+                visibility,
+                group_ids,
             )
         return _base_payload(server, updated)
     except Exception as exc:

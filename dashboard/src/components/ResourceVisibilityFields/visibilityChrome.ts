@@ -10,6 +10,8 @@ export type AudienceSnapshot = {
   /** Group catalog loaded successfully (may still be empty). */
   groupsLoaded: boolean;
   groupCountFromList: number;
+  /** Group projected from the caller's role, when present (department share). */
+  mySyncGroupId: string | null;
 };
 
 /**
@@ -36,14 +38,28 @@ export function showGroupVisibilityOption(
   return true;
 }
 
+/** Department share applies to user-owned resources of users with a role group. */
+export function showDepartmentVisibilityOption(
+  audience: AudienceSnapshot,
+  opts: { allowOwner: boolean; allowDepartment?: boolean },
+): boolean {
+  if (!opts.allowDepartment || !opts.allowOwner) return false;
+  return audience.mySyncGroupId != null && audience.mySyncGroupId !== "";
+}
+
 /** Hide the whole picker when one account is the only audience, or when a single remaining choice would be "everyone". */
 export function isVisibilityControlVisible(
   audience: AudienceSnapshot,
-  opts: { allowOwner: boolean; visibility: ResourceVisibilityMode },
+  opts: {
+    allowOwner: boolean;
+    visibility: ResourceVisibilityMode;
+    allowDepartment?: boolean;
+  },
 ): boolean {
   if (audience.status !== "ready") return false;
   if (audience.userCount === 1) return false;
   const groups = showGroupVisibilityOption(audience, opts.visibility);
-  const choices = (opts.allowOwner ? 1 : 0) + 1 + (groups ? 1 : 0);
+  const department = showDepartmentVisibilityOption(audience, opts);
+  const choices = (opts.allowOwner ? 1 : 0) + 1 + (groups ? 1 : 0) + (department ? 1 : 0);
   return choices > 1;
 }

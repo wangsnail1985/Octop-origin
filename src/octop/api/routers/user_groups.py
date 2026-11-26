@@ -67,6 +67,10 @@ class ReplaceMembersBody(BaseModel):
 class SharingAudienceResponse(BaseModel):
     user_count: int = Field(description="Enabled accounts that can sign in.")
     group_count: int = Field(description="User groups, including disabled ones.")
+    my_sync_group_id: str | None = Field(
+        default=None,
+        description="User group projected from the caller's role, if any (department share).",
+    )
 
 
 def _clean_name(raw: str) -> str:
@@ -165,7 +169,7 @@ def _require_group(server: Any, user_group_id: str) -> Any:
 @router.get("/audience", summary="Counts for the who-can-use picker")
 async def sharing_audience(
     server: Any = Depends(get_server),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> SharingAudienceResponse:
     """Enabled-account and user-group counts.
 
@@ -174,7 +178,19 @@ async def sharing_audience(
     """
     users = server.user_manager.list_all(include_disabled=False)
     groups = server.services.repos.user_group_repo.list_all()
-    return SharingAudienceResponse(user_count=len(users), group_count=len(groups))
+    my_sync_group_id: str | None = None
+    from octop.infra.users.role_groups import _synced_group_for_role
+
+    try:
+        my_group = _synced_group_for_role(server.services.repos, role_id=str(user.role))
+        my_sync_group_id = my_group.user_group_id if my_group is not None else None
+    except OctopError:
+        my_sync_group_id = None
+    return SharingAudienceResponse(
+        user_count=len(users),
+        group_count=len(groups),
+        my_sync_group_id=my_sync_group_id,
+    )
 
 
 @router.get("", summary="List user groups")
@@ -264,6 +280,13 @@ async def delete_user_group(
     server: Any = Depends(get_server),
     _: User = Depends(require_permission("user_groups")),
 ) -> None:
+    row = _require_group(server, user_group_id)
+    if row.sync_role_id is not None:
+        raise OctopError(
+            ErrorCode.FORBIDDEN,
+            "this group is synced from a role; delete the role instead",
+            status=400,
+        )
     if not server.services.repos.user_group_repo.delete(user_group_id):
         raise OctopError(ErrorCode.NOT_FOUND, "user group not found")
     delete_profile_avatar(server.services.avatars("group"), user_group_id)

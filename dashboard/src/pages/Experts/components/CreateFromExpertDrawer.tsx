@@ -83,7 +83,10 @@ import {
 import AgentBackendFields from "./AgentBackendFields";
 import ExpertAvatarPicker from "./ExpertAvatarPicker";
 import { ResourceVisibilityFormItem } from "../../../components/ResourceVisibilityFields";
-import type { ResourceVisibilityMode } from "../../../api/modules/userGroups";
+import {
+  isSharedVisibility,
+  type SharedVisibilityMode,
+} from "../../../api/modules/userGroups";
 import ExpertComposerDefaultsFields from "./ExpertComposerDefaultsFields";
 import WelcomeConfig, { type WelcomeConfigRef } from "./WelcomeConfig";
 import {
@@ -277,7 +280,7 @@ export default function CreateFromExpertDrawer({
   const [skillPackagesLoading, setSkillPackagesLoading] = useState(false);
   const [colorPalette, setColorPalette] = useState<string>("rose");
   const [expertVisibility, setExpertVisibility] =
-    useState<ResourceVisibilityMode>("owner");
+    useState<SharedVisibilityMode>("owner");
   const [expertGroupIds, setExpertGroupIds] = useState<string[]>([]);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
@@ -866,7 +869,9 @@ export default function CreateFromExpertDrawer({
           groupIds={expertGroupIds}
           extra={t("experts.visibilityHint")}
           onChange={(next) => {
-            setExpertVisibility(next.visibility);
+            if (isSharedVisibility(next.visibility)) {
+              setExpertVisibility(next.visibility);
+            }
             setExpertGroupIds(
               next.visibility === "groups" ? next.groupIds : [],
             );

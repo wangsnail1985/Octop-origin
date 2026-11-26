@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isVisibilityControlVisible,
   needsGroupCatalog,
+  showDepartmentVisibilityOption,
   showGroupVisibilityOption,
   type AudienceSnapshot,
 } from "./visibilityChrome";
@@ -13,6 +14,7 @@ function ready(patch: Partial<AudienceSnapshot> = {}): AudienceSnapshot {
     groupCount: 0,
     groupsLoaded: true,
     groupCountFromList: 0,
+    mySyncGroupId: null,
     ...patch,
   };
 }
@@ -103,6 +105,54 @@ describe("isVisibilityControlVisible", () => {
       isVisibilityControlVisible(ready(), {
         allowOwner: false,
         visibility: "groups",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("showDepartmentVisibilityOption", () => {
+  it("requires the allowDepartment opt-in and a role-synced group", () => {
+    expect(
+      showDepartmentVisibilityOption(ready(), {
+        allowOwner: true,
+        allowDepartment: true,
+      }),
+    ).toBe(false);
+    expect(
+      showDepartmentVisibilityOption(ready({ mySyncGroupId: "g1" }), {
+        allowOwner: true,
+      }),
+    ).toBe(false);
+    expect(
+      showDepartmentVisibilityOption(ready({ mySyncGroupId: "g1" }), {
+        allowOwner: false,
+        allowDepartment: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows for owners with a role-synced group", () => {
+    expect(
+      showDepartmentVisibilityOption(ready({ mySyncGroupId: "g1" }), {
+        allowOwner: true,
+        allowDepartment: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("counts as a choice in the picker visibility", () => {
+    expect(
+      isVisibilityControlVisible(ready({ userCount: 1, mySyncGroupId: "g1" }), {
+        allowOwner: true,
+        visibility: "owner",
+        allowDepartment: true,
+      }),
+    ).toBe(false);
+    expect(
+      isVisibilityControlVisible(ready({ mySyncGroupId: "g1" }), {
+        allowOwner: true,
+        visibility: "owner",
+        allowDepartment: true,
       }),
     ).toBe(true);
   });

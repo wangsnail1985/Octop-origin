@@ -4,6 +4,7 @@ import {
   requestBlob,
   requestUpload,
 } from "../request";
+import type { ResourceVisibilityMode } from "./userGroups";
 
 export interface KnowledgeLimits {
   max_bases_per_owner: number;
@@ -66,7 +67,7 @@ export interface KnowledgeBase {
   description: string;
   default_open: boolean;
   shared: boolean;
-  visibility?: "all" | "groups" | "owner";
+  visibility?: ResourceVisibilityMode;
   group_ids?: string[];
   icon_name: string;
   icon_url?: string;
@@ -324,7 +325,7 @@ export const knowledgeBasesApi = {
     description?: string;
     default_open?: boolean;
     shared?: boolean;
-    visibility?: "all" | "groups" | "owner";
+    visibility?: ResourceVisibilityMode;
     group_ids?: string[];
     icon_name?: string;
     icon_url?: string;
@@ -342,7 +343,7 @@ export const knowledgeBasesApi = {
       description?: string;
       default_open?: boolean;
       shared?: boolean;
-      visibility?: "all" | "groups" | "owner";
+      visibility?: ResourceVisibilityMode;
       group_ids?: string[];
       icon_name?: string;
       icon_url?: string;
