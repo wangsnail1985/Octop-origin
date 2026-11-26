@@ -12,6 +12,7 @@ import { ResourceAvatar, ROLE_AVATAR_PRESETS } from "../AvatarPicker";
 import {
   isVisibilityControlVisible,
   needsGroupCatalog,
+  showDepartmentVisibilityOption,
   showGroupVisibilityOption,
   type AudienceSnapshot,
 } from "./visibilityChrome";
@@ -27,6 +28,8 @@ export type ResourceVisibilityValue = {
 type FieldsProps = {
   /** User-owned resources can stay private (`owner`). Admin resources omit it. */
   allowOwner: boolean;
+  /** Offer 「本部门可见」 (requires a role-synced group on the caller). */
+  allowDepartment?: boolean;
   visibility: ResourceVisibilityMode;
   groupIds: string[];
   onChange: (next: ResourceVisibilityValue) => void;
@@ -48,6 +51,7 @@ let audienceState: AudienceState = {
   groupCount: null,
   groupsLoaded: false,
   groupCountFromList: 0,
+  mySyncGroupId: null,
   groups: [],
   loadedAt: 0,
 };
@@ -74,6 +78,8 @@ function loadAudience(): Promise<void> {
     );
     const userCount = counts.ok ? counts.row.user_count : null;
     const groupCount = counts.ok ? counts.row.group_count : null;
+    const mySyncGroupId =
+      counts.ok && counts.row.my_sync_group_id ? counts.row.my_sync_group_id : null;
     let groups: UserGroup[] = [];
     let groupsLoaded = false;
     if (needsGroupCatalog({ userCount, groupCount })) {
@@ -92,6 +98,7 @@ function loadAudience(): Promise<void> {
       groupCount,
       groupsLoaded,
       groupCountFromList: groups.length,
+      mySyncGroupId,
       groups,
       loadedAt: Date.now(),
     });
@@ -114,6 +121,11 @@ function useResourceAudience(): AudienceState {
   }, []);
 
   return snap;
+}
+
+/** Group projected from the caller's role, when present (department share). */
+export function useMySyncGroupId(): string | null {
+  return useResourceAudience().mySyncGroupId;
 }
 
 function GroupLabel({
@@ -141,6 +153,7 @@ function GroupLabel({
 /** Radio + optional multi-select for who may use a resource. */
 export function ResourceVisibilityFields({
   allowOwner,
+  allowDepartment = false,
   visibility,
   groupIds,
   onChange,
@@ -156,8 +169,14 @@ export function ResourceVisibilityFields({
   );
   const disabledLabel = t("adminUsers.statusDisabled");
   const showGroups = showGroupVisibilityOption(audience, visibility);
+  const showDepartment = showDepartmentVisibilityOption(audience, {
+    allowOwner,
+    allowDepartment,
+  });
 
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, { allowOwner, visibility, allowDepartment })
+  ) {
     return null;
   }
 
@@ -168,6 +187,14 @@ export function ResourceVisibilityFields({
     { value: "all" as const, label: t("resourceVisibility.all") },
     ...(showGroups
       ? [{ value: "groups" as const, label: t("resourceVisibility.groups") }]
+      : []),
+    ...(showDepartment
+      ? [
+          {
+            value: "department" as const,
+            label: t("resourceVisibility.department"),
+          },
+        ]
       : []),
   ];
 
@@ -238,6 +265,8 @@ export function ResourceVisibilityFields({
 
 type FormItemProps = {
   allowOwner: boolean;
+  /** Offer 「本部门可见」 (requires a role-synced group on the caller). */
+  allowDepartment?: boolean;
   visibility: ResourceVisibilityMode;
   groupIds: string[];
   onChange: (next: ResourceVisibilityValue) => void;
@@ -252,6 +281,7 @@ type FormItemProps = {
 /** Drawer-friendly Form.Item wrapping ``ResourceVisibilityFields``. */
 export function ResourceVisibilityFormItem({
   allowOwner,
+  allowDepartment,
   visibility,
   groupIds,
   onChange,
@@ -262,7 +292,13 @@ export function ResourceVisibilityFormItem({
 }: FormItemProps) {
   const { t } = useTranslation();
   const audience = useResourceAudience();
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, {
+      allowOwner,
+      visibility,
+      allowDepartment,
+    })
+  ) {
     return null;
   }
   return (
@@ -274,6 +310,7 @@ export function ResourceVisibilityFormItem({
     >
       <ResourceVisibilityFields
         allowOwner={allowOwner}
+        allowDepartment={allowDepartment}
         visibility={visibility}
         groupIds={groupIds}
         onChange={onChange}
@@ -285,6 +322,8 @@ export function ResourceVisibilityFormItem({
 
 type CollapseProps = {
   allowOwner?: boolean;
+  /** Offer 「本部门可见」 (requires a role-synced group on the caller). */
+  allowDepartment?: boolean;
   visibility: ResourceVisibilityMode;
   groupIds: string[];
   onChange: (next: ResourceVisibilityValue) => void;
@@ -304,6 +343,7 @@ type CollapseProps = {
  */
 export function ResourceVisibilityCollapse({
   allowOwner = false,
+  allowDepartment,
   visibility,
   groupIds,
   onChange,
@@ -319,7 +359,13 @@ export function ResourceVisibilityCollapse({
   const [open, setOpen] = useState(defaultOpen || visibility === "groups");
   const restricted = visibility === "groups";
 
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, {
+      allowOwner,
+      visibility,
+      allowDepartment,
+    })
+  ) {
     return null;
   }
   return (
@@ -343,6 +389,7 @@ export function ResourceVisibilityCollapse({
           {hint ? <p className={styles.collapseHint}>{hint}</p> : null}
           <ResourceVisibilityFields
             allowOwner={allowOwner}
+            allowDepartment={allowDepartment}
             visibility={visibility}
             groupIds={groupIds}
             onChange={onChange}
@@ -357,15 +404,23 @@ export function ResourceVisibilityCollapse({
 /** Hides the surrounding label when the picker itself has nothing to choose. */
 export function ResourceVisibilityGate({
   allowOwner,
+  allowDepartment,
   visibility,
   children,
 }: {
   allowOwner: boolean;
+  allowDepartment?: boolean;
   visibility: ResourceVisibilityMode;
   children: ReactNode;
 }) {
   const audience = useResourceAudience();
-  if (!isVisibilityControlVisible(audience, { allowOwner, visibility })) {
+  if (
+    !isVisibilityControlVisible(audience, {
+      allowOwner,
+      visibility,
+      allowDepartment,
+    })
+  ) {
     return null;
   }
   return children;

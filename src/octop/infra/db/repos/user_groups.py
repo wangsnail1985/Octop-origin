@@ -19,6 +19,7 @@ class UserGroupRow:
     avatar_icon: str | None
     created_at: int
     updated_at: int
+    sync_role_id: str | None = None
 
     @classmethod
     def from_row(cls, row: DbRow) -> UserGroupRow:
@@ -30,6 +31,7 @@ class UserGroupRow:
         enabled = True
         if "enabled" in keys and row["enabled"] is not None:
             enabled = bool(int(row["enabled"]))
+        sync_role_id = row["sync_role_id"] if "sync_role_id" in keys else None
         return cls(
             id=int(row["id"]),
             user_group_id=str(row["user_group_id"]),
@@ -39,6 +41,7 @@ class UserGroupRow:
             avatar_icon=icon or None,
             created_at=int(row["created_at"]),
             updated_at=int(row["updated_at"]),
+            sync_role_id=str(sync_role_id) if sync_role_id else None,
         )
 
 
@@ -75,6 +78,7 @@ class UserGroupRepo:
         enabled: bool = True,
         avatar_icon: str | None = None,
         user_group_id: str | None = None,
+        sync_role_id: str | None = None,
     ) -> UserGroupRow:
         ts = now_ts()
         if user_group_id:
@@ -92,14 +96,39 @@ class UserGroupRepo:
             insert_returning_id(
                 conn,
                 "INSERT INTO user_group("
-                "user_group_id, name, description, enabled, avatar_icon, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (group_id, name, description, int(enabled), avatar_icon, ts, ts),
+                "user_group_id, name, description, enabled, avatar_icon, sync_role_id,"
+                " created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    group_id,
+                    name,
+                    description,
+                    int(enabled),
+                    avatar_icon,
+                    sync_role_id,
+                    ts,
+                    ts,
+                ),
             )
         row = self.get(group_id)
         if row is None:
             raise RuntimeError(f"user group insert failed: {group_id}")
         return row
+
+    def get_by_sync_role_id(self, role_id: str) -> UserGroupRow | None:
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_group WHERE sync_role_id = ?",
+                (role_id,),
+            ).fetchone()
+        return UserGroupRow.from_row(row) if row else None
+
+    def clear_sync_role(self, user_group_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE user_group SET sync_role_id = NULL, updated_at = ? WHERE user_group_id = ?",
+                (now_ts(), user_group_id),
+            )
 
     def update(
         self,

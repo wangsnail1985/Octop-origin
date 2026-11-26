@@ -100,6 +100,7 @@ import { CopyableResourceId } from "../../components/CopyableResourceId";
 import {
   ResourceVisibilityFields,
   ResourceVisibilityGate,
+  useMySyncGroupId,
 } from "../../components/ResourceVisibilityFields";
 import { TextAssistBar } from "../../components/TextAssistBar";
 import type { ResourceVisibilityMode } from "../../api/modules/userGroups";
@@ -297,6 +298,7 @@ export default function KnowledgeBasesPage() {
   const isMobile = useIsMobile();
   const timeZone = useServerTimezone();
   const user = useCurrentUser();
+  const mySyncGroupId = useMySyncGroupId();
   const canConfigureKb = userCan(user, "knowledge_settings");
   const { viewMode, setViewMode, showCardView } = useCardTableView(
     loadDocsViewMode(),
@@ -1213,7 +1215,14 @@ export default function KnowledgeBasesPage() {
       max_documents: base.max_documents,
     });
     setDefaultOpenChecked(base.default_open);
-    setBaseVisibility(base.visibility ?? (base.shared ? "all" : "owner"));
+    const rawVisibility = base.visibility ?? (base.shared ? "all" : "owner");
+    // A share scoped to exactly my role group is displayed as 「本部门可见」.
+    const isDepartmentShare =
+      rawVisibility === "groups" &&
+      mySyncGroupId != null &&
+      (base.group_ids ?? []).length === 1 &&
+      base.group_ids?.[0] === mySyncGroupId;
+    setBaseVisibility(isDepartmentShare ? "department" : rawVisibility);
     setBaseGroupIds(base.group_ids ?? []);
     setEditingBaseId(base.id);
     setBaseDrawerOpen(true);
@@ -3932,7 +3941,7 @@ export default function KnowledgeBasesPage() {
                 onChange={setDefaultOpenChecked}
               />
             </div>
-            <ResourceVisibilityGate allowOwner visibility={baseVisibility}>
+            <ResourceVisibilityGate allowOwner allowDepartment visibility={baseVisibility}>
               <div className={styles.formOptionRowVisibility}>
                 <div className={styles.formOptionCopy}>
                   <span className={styles.switchLabel}>
@@ -3941,6 +3950,7 @@ export default function KnowledgeBasesPage() {
                 </div>
                 <ResourceVisibilityFields
                   allowOwner
+                  allowDepartment
                   visibility={baseVisibility}
                   groupIds={baseGroupIds}
                   onChange={(next) => {

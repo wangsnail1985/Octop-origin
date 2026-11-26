@@ -6375,6 +6375,7 @@
     "owner": "Only me",
     "all": "Everyone",
     "groups": "Specific user groups",
+    "department": "My department",
     "groupPlaceholder": "Choose at least one user group",
     "needGroup": "Choose at least one user group",
     "groupAccess": "Group access",

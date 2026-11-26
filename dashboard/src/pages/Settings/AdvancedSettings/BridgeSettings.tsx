@@ -69,7 +69,10 @@ import {
 } from "../../../utils/resourceAudience";
 import StreamSetupGuide from "../../../components/StreamSetupGuide/StreamSetupGuide";
 import { TextAssistBar } from "../../../components/TextAssistBar";
-import type { ResourceVisibilityMode } from "../../../api/modules/userGroups";
+import {
+  isSharedVisibility,
+  type SharedVisibilityMode,
+} from "../../../api/modules/userGroups";
 import { useAgent } from "../../../context/AgentContext";
 import { useCardTableView } from "../../../hooks/useCardTableView";
 import { useIsMobile } from "../../../hooks/useIsMobile";
@@ -101,10 +104,10 @@ const DEFAULT_BRIDGE_ICON = DEFAULT_BRIDGE_AVATAR_ICON;
 const MAX_BRIDGE_CONNECTIONS = 10;
 
 function visibilityFromRow(row: {
-  visibility?: ResourceVisibilityMode | null;
+  visibility?: SharedVisibilityMode | null;
   shared?: boolean | null;
   group_ids?: string[] | null;
-}): { visibility: ResourceVisibilityMode; groupIds: string[] } {
+}): { visibility: SharedVisibilityMode; groupIds: string[] } {
   if (row.visibility === "groups") {
     return { visibility: "groups", groupIds: row.group_ids ?? [] };
   }
@@ -115,7 +118,7 @@ function visibilityFromRow(row: {
 }
 
 function visibilityFields(
-  visibility: ResourceVisibilityMode,
+  visibility: SharedVisibilityMode,
   groupIds: string[],
 ) {
   return {
@@ -1045,10 +1048,10 @@ export default function BridgeSettingsPanel({
   const editIconUrl = Form.useWatch("icon_url", editForm);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [createVisibility, setCreateVisibility] =
-    useState<ResourceVisibilityMode>("owner");
+    useState<SharedVisibilityMode>("owner");
   const [createGroupIds, setCreateGroupIds] = useState<string[]>([]);
   const [editVisibility, setEditVisibility] =
-    useState<ResourceVisibilityMode>("owner");
+    useState<SharedVisibilityMode>("owner");
   const [editGroupIds, setEditGroupIds] = useState<string[]>([]);
 
   const createFromQuery = searchParams.get("create") === "1";
@@ -2036,7 +2039,9 @@ export default function BridgeSettingsPanel({
                   visibility={createVisibility}
                   groupIds={createGroupIds}
                   onChange={(next) => {
-                    setCreateVisibility(next.visibility);
+                    if (isSharedVisibility(next.visibility)) {
+                      setCreateVisibility(next.visibility);
+                    }
                     setCreateGroupIds(
                       next.visibility === "groups" ? next.groupIds : [],
                     );
@@ -2332,7 +2337,9 @@ export default function BridgeSettingsPanel({
                   visibility={editVisibility}
                   groupIds={editGroupIds}
                   onChange={(next) => {
-                    setEditVisibility(next.visibility);
+                    if (isSharedVisibility(next.visibility)) {
+                      setEditVisibility(next.visibility);
+                    }
                     setEditGroupIds(
                       next.visibility === "groups" ? next.groupIds : [],
                     );

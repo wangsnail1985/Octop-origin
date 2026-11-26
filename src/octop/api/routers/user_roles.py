@@ -266,6 +266,12 @@ async def create_user_role(
     except ValueError as exc:
         _name_taken(exc)
         raise
+    if row.user_role_id not in BUILTIN_USER_ROLE_IDS:
+        from octop.infra.users.role_groups import ensure_role_group
+
+        ensure_role_group(
+            server.services.repos, role_id=row.user_role_id, role_name=row.user_role_name
+        )
     server.services.audit_repo.write(
         actor=actor.username,
         action="user_role.create",
@@ -335,6 +341,14 @@ async def patch_user_role(
         _name_taken(exc)
         raise
     assert updated is not None
+    if updated.user_role_id not in BUILTIN_USER_ROLE_IDS:
+        from octop.infra.users.role_groups import ensure_role_group
+
+        ensure_role_group(
+            server.services.repos,
+            role_id=updated.user_role_id,
+            role_name=updated.user_role_name,
+        )
     server.services.audit_repo.write(
         actor=actor.username,
         action="user_role.update",
@@ -360,6 +374,10 @@ async def delete_user_role(
             ErrorCode.USER_ROLE_IN_USE,
             f"role is assigned to {in_use} user(s); reassign them first",
         )
+    from octop.infra.users.role_groups import disable_role_group
+
+    # Detach + disable the synced group first so the role row can be deleted.
+    disable_role_group(server.services.repos, role_id=user_role_id)
     _repo(server).delete(user_role_id)
     from octop.infra.users.profile_avatar import delete_profile_avatar
 

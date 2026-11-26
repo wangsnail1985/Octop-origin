@@ -196,6 +196,9 @@ class UserManager:
                 permissions=keys,
             )
             self._users[username] = user
+            from octop.infra.users.role_groups import sync_user_membership
+
+            sync_user_membership(self._services.repos, user_id=uid, role_id=role_id)
             self._services.audit_repo.write(actor=username, action="user.create", target=username)
             return user
 
@@ -305,6 +308,11 @@ class UserManager:
                             raise
                         await asyncio.sleep(0.01 * (attempt + 1))
                     else:
+                        from octop.infra.users.role_groups import sync_user_membership
+
+                        sync_user_membership(
+                            self._services.repos, user_id=uid, role_id=str(sso_role_id)
+                        )
                         user = User(
                             id=uid,
                             username=username,
@@ -661,6 +669,9 @@ class UserManager:
             raise OctopError(ErrorCode.NOT_FOUND, "user not found")
         role_id = str(role)
         self._services.user_repo.set_role(row.id, role_id)
+        from octop.infra.users.role_groups import sync_user_membership
+
+        sync_user_membership(self._services.repos, user_id=row.id, role_id=role_id)
         async with self._lock:
             current = self._users.get(username)
             if current is not None:

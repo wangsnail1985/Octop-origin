@@ -1600,11 +1600,12 @@ def _ensure_skill_package_shared_schema(db: DatabasePool) -> None:
 
 
 def _ensure_user_group_profile_schema(db: DatabasePool) -> None:
-    """Enable flag and preset avatar on user groups. Idempotent."""
+    """Enable flag, preset avatar, and role sync link on user groups. Idempotent."""
     if not _table_exists(db, "user_group"):
         return
     _ensure_column(db, "user_group", "enabled", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(db, "user_group", "avatar_icon", "TEXT")
+    _ensure_column(db, "user_group", "sync_role_id", "TEXT REFERENCES user_role(user_role_id)")
 
 
 def _ensure_instance_lease_schema(db: DatabasePool) -> None:
@@ -2261,6 +2262,11 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
         _ensure_user_mfa_schema(db)
         _ensure_instance_lease_schema(db)
         _ensure_thread_contributed_schema(db)
+        with db.connect() as conn:
+            conn.execute("UPDATE _schema_version SET version = ?", (version,))
+        return
+    if version == 26:
+        _ensure_user_group_profile_schema(db)
         with db.connect() as conn:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return

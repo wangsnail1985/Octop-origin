@@ -93,7 +93,10 @@ import {
   SharedAvatarMark,
   SharedResourceBadge,
 } from "../../components/SharedResourceBadge";
-import type { ResourceVisibilityMode } from "../../api/modules/userGroups";
+import {
+  isSharedVisibility,
+  type SharedVisibilityMode,
+} from "../../api/modules/userGroups";
 import { PackageSkillCard } from "./PackageSkillCard";
 import PackageSkillsTable from "./PackageSkillsTable";
 import { SkillsetFromHubDrawer } from "./SkillsetFromHubDrawer";
@@ -162,7 +165,7 @@ export default function SkillPackagesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [packageDrawerOpen, setPackageDrawerOpen] = useState(false);
   const [packageVisibility, setPackageVisibility] =
-    useState<ResourceVisibilityMode>("all");
+    useState<SharedVisibilityMode>("all");
   const [packageGroupIds, setPackageGroupIds] = useState<string[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -1303,7 +1306,9 @@ export default function SkillPackagesPage() {
                   visibility={packageVisibility}
                   groupIds={packageGroupIds}
                   onChange={(next) => {
-                    setPackageVisibility(next.visibility);
+                    if (isSharedVisibility(next.visibility)) {
+                      setPackageVisibility(next.visibility);
+                    }
                     setPackageGroupIds(
                       next.visibility === "groups" ? next.groupIds : [],
                     );
