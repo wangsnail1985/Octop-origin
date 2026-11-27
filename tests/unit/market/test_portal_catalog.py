@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 import octop.infra.market.http as market_http
+import octop.infra.market.install as market_install
 from octop.infra.market import (
     PortalMarketError,
     clear_market_cache,
@@ -50,21 +51,9 @@ def test_portal_catalog_lists_plugins_and_experts(monkeypatch: pytest.MonkeyPatc
         "id": "weather",
         "version": "0.1.0",
         "name": {"zh": "天气", "en": "Weather"},
-        "description": {"zh": "天气", "en": "Weather"},
+        "description": {"zh": "天气", "en": "天气"},
         "download_url": (
             "https://download.octop.cloud/octop/market/plugins/weather/0.1.0/weather-0.1.0.zip"
-        ),
-    }
-    expert = {
-        "id": "ops-engineer",
-        "slug": "ops-engineer",
-        "version": "1.0.0",
-        "label": {"zh": "运维", "en": "Ops"},
-        "description": {"zh": "描述", "en": "Description"},
-        "scene": "tech",
-        "download_url": (
-            "https://download.octop.cloud/octop/market/experts/ops-engineer/1.0.0/"
-            "ops-engineer-1.0.0.zip"
         ),
     }
     calls: list[str] = []
@@ -74,8 +63,6 @@ def test_portal_catalog_lists_plugins_and_experts(monkeypatch: pytest.MonkeyPatc
         calls.append(url)
         if url.endswith("/api/market/plugins"):
             return _portal_body([plugin])
-        if url.endswith("/api/market/experts"):
-            return _portal_body([expert])
         raise PortalMarketError("not found", status=404)
 
     monkeypatch.setattr(market_http, "fetch_bytes", fake_fetch)
@@ -83,18 +70,17 @@ def test_portal_catalog_lists_plugins_and_experts(monkeypatch: pytest.MonkeyPatc
     plugins = list_market_plugins()
     assert plugins[0]["id"] == "weather"
     assert plugins[0]["download_url"].endswith("/plugins/weather/0.1.0/weather-0.1.0.zip")
+    assert pick_localized(plugins[0]["name"], "en") == "Weather"
+    # The expert market is a frozen local snapshot: no portal request, local icons.
     expert_row = get_market_expert("ops-engineer")
     assert expert_row is not None
     assert expert_row["slug"] == "ops-engineer"
-    assert pick_localized(plugins[0]["name"], "en") == "Weather"
+    assert expert_row["icon_url"].startswith("/experts/avatars/")
     items, scenes = list_market_experts(query="ops", scene="tech")
-    assert [item["slug"] for item in items] == ["ops-engineer"]
-    assert scenes == ["tech"]
-    assert calls == [
-        "https://octop.cloud/api/market/plugins",
-        "https://octop.cloud/api/market/experts",
-    ]
-    assert all("index.json" not in url and "meta.json" not in url for url in calls)
+    assert "ops-engineer" in [item["slug"] for item in items]
+    assert "tech" in scenes
+    assert all(item["scene"] == "tech" for item in items)
+    assert calls == ["https://octop.cloud/api/market/plugins"]
 
 
 def test_portal_failure_does_not_fetch_object_index(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,23 +115,18 @@ def test_install_portal_expert_extracts_library(
         del limit
         if url == archive_url:
             return package
-        if url.endswith("/api/market/experts"):
-            return _portal_body(
-                [
-                    {
-                        "slug": "ops-engineer",
-                        "label": {"zh": "运维", "en": "Ops"},
-                        "icon_url": (
-                            "https://download.octop.cloud/octop/market/experts/"
-                            "ops-engineer/1.0.0/avatar.svg"
-                        ),
-                        "download_url": archive_url,
-                    }
-                ]
-            )
         raise PortalMarketError("not found", status=404)
 
     monkeypatch.setattr(market_http, "fetch_bytes", fake_fetch)
+    monkeypatch.setattr(
+        market_install,
+        "get_market_expert",
+        lambda slug: {
+            "slug": slug,
+            "icon_url": "/experts/avatars/ops-engineer.svg",
+            "download_url": archive_url,
+        },
+    )
     installed = install_portal_expert("ops-engineer", tmp_path)
     assert installed is not None
     assert installed.expert_id == "ops-engineer"
@@ -168,11 +149,14 @@ def test_install_portal_expert_keeps_custom_archive_url(
         seen.append(url)
         if url == archive_url:
             return package
-        if url.endswith("/api/market/experts"):
-            return _portal_body([{"slug": "ops-engineer", "download_url": archive_url}])
         raise PortalMarketError("not found", status=404)
 
     monkeypatch.setattr(market_http, "fetch_bytes", fake_fetch)
+    monkeypatch.setattr(
+        market_install,
+        "get_market_expert",
+        lambda slug: {"slug": slug, "download_url": archive_url},
+    )
     installed = install_portal_expert("ops-engineer", tmp_path)
     assert installed is not None
     assert archive_url in seen
