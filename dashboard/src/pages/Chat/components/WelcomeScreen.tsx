@@ -108,9 +108,11 @@ export default function WelcomeScreen({
                     @{agentName}
                   </span>
                 </span>
-                <span className={styles.welcomeSubtitleText}>
-                  {welcomeSuffix ?? t("chatWelcome.descriptionWithAgentSuffix")}
-                </span>
+                {welcomeSuffix ? (
+                  <span className={styles.welcomeSubtitleText}>
+                    {welcomeSuffix}
+                  </span>
+                ) : null}
               </>
             ) : (
               t("chatWelcome.description")

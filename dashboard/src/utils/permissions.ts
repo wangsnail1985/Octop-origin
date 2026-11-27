@@ -132,11 +132,6 @@ export const USERS_TAB_PERMISSIONS = {
   local: "users",
   roles: "user_roles",
   groups: "user_groups",
-  feishu: "sso_feishu",
-  wecom: "sso_wecom",
-  dingtalk: "sso_dingtalk",
-  oidc: "sso_oidc",
-  ldap: "sso_ldap",
 } as const;
 
 export const ADVANCED_TAB_PERMISSIONS = {

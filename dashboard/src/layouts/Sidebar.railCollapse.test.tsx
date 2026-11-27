@@ -20,9 +20,6 @@ vi.mock("../components/AvatarDropdown", () => ({
 vi.mock("../components/AppVersionBadge", () => ({
   default: () => null,
 }));
-vi.mock("../components/CurrentVersionBadge", () => ({
-  default: () => null,
-}));
 vi.mock("../hooks/useUpdateStatus", () => ({
   useUpdateStatus: () => ({ hasUpdate: false }),
 }));
@@ -100,7 +97,7 @@ describe("nav rail fold control", () => {
     );
     expect(rail.style.paddingLeft).toBe("");
     expect(
-      container.querySelector(`.${styles.brandMarkCollapsed}`),
+      container.querySelector('img[src*="logo_mark.svg"]'),
     ).toBeTruthy();
   });
 

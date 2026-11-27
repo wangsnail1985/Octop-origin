@@ -93,6 +93,39 @@ export interface ProviderRow {
   integration?: string;
 }
 
+/**
+ * Fork customization: provider brands hidden from every Models page section
+ * (preset cards, embedding tab, add-provider flows). The bundled catalog
+ * comes from octop-harness and cannot be edited in place, so the fetched
+ * preset list is filtered here instead.
+ */
+const HIDDEN_PRESET_IDS = new Set([
+  "magpie",
+  "openai",
+  "openai-codex",
+  "anthropic",
+  "gemini",
+  "groq",
+  "openrouter",
+]);
+const HIDDEN_PRESET_GROUPS = new Set([
+  "tencent",
+  "kimi",
+  "minimax",
+  "siliconflow",
+  "volcengine",
+  "iflytek",
+  "opencode",
+]);
+
+function filterHiddenPresets(presets: ProviderPreset[]): ProviderPreset[] {
+  return presets.filter(
+    (p) =>
+      !HIDDEN_PRESET_IDS.has(p.id) &&
+      !HIDDEN_PRESET_GROUPS.has(p.provider_group ?? ""),
+  );
+}
+
 /** True when this provider belongs on the embedding Models tab. */
 export function isEmbeddingProvider(provider: ProviderRow): boolean {
   if (provider.purpose === "embedding") return true;
@@ -172,7 +205,7 @@ export function useProviders(): UseProvidersResult {
         models: Array.isArray(r.models) ? r.models : [],
       }));
       setProviders(normalized);
-      setPresets(presetList);
+      setPresets(filterHiddenPresets(presetList));
       setResolvedModels(resolved);
       // Only an explicit per-user preference is starred. The global active
       // model is a separate fallback and must not look selected here.
