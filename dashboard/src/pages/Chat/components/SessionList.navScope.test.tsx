@@ -91,8 +91,7 @@ describe("MinimalAgentSessionNav nav scopes", () => {
     vi.spyOn(octopThreadsApi, "list").mockResolvedValue([]);
   });
 
-  it("filters the same expert, team, and cloud tabs", async () => {
-    const user = userEvent.setup();
+  it("keeps cloud experts on the expert tab; the cloud tab is removed", async () => {
     render(
       <MemoryRouter>
         <MinimalAgentSessionNav
@@ -118,12 +117,7 @@ describe("MinimalAgentSessionNav nav scopes", () => {
       screen.getByLabelText("chat.remoteExpert.banner"),
     ).toBeInTheDocument();
     expect(screen.queryByText("本地团队")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "云端" }));
-    expect(screen.getByText("云端专家")).toBeInTheDocument();
-    expect(screen.getByText("云端团队")).toBeInTheDocument();
-    expect(screen.queryByText("本地专家")).not.toBeInTheDocument();
-    expect(screen.queryByText("本地团队")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "云端" })).not.toBeInTheDocument();
   });
 });
 
@@ -245,7 +239,7 @@ describe("SessionList nav scopes", () => {
     ).toBeTruthy();
   });
 
-  it("filters experts, teams, and cloud under the search box", async () => {
+  it("filters experts and teams under the search box; no cloud tab", async () => {
     const user = userEvent.setup();
     renderList();
 
@@ -267,15 +261,10 @@ describe("SessionList nav scopes", () => {
     expect(screen.getByText("云端团队")).toBeInTheDocument();
     expect(screen.queryByText("本地专家")).not.toBeInTheDocument();
     expect(screen.queryByText("云端专家")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "云端" }));
-    expect(screen.getByText("云端专家")).toBeInTheDocument();
-    expect(screen.getByText("云端团队")).toBeInTheDocument();
-    expect(screen.queryByText("本地专家")).not.toBeInTheDocument();
-    expect(screen.queryByText("本地团队")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "云端" })).not.toBeInTheDocument();
   });
 
-  it("opens a drawer for an empty team or cloud tab", async () => {
+  it("opens a drawer for an empty team tab", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter initialEntries={["/chat"]}>
@@ -307,13 +296,6 @@ describe("SessionList nav scopes", () => {
     await user.click(screen.getByRole("button", { name: "创建第一个团队" }));
     expect(
       screen.getByRole("dialog", { name: "team-drawer" }),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "云端" }));
-    expect(screen.getByText("还没有云端协同")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "添加云端" }));
-    expect(
-      screen.getByRole("dialog", { name: "cloud-drawer" }),
     ).toBeInTheDocument();
   });
 });

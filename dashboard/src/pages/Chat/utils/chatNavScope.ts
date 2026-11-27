@@ -4,11 +4,9 @@ import { isTeamAgent } from "../../../utils/teamAgent";
 /** Classic chat-nav filter under the search box. */
 export type ChatNavScope = "experts" | "teams" | "cloud";
 
-export const CHAT_NAV_SCOPES: readonly ChatNavScope[] = [
-  "experts",
-  "teams",
-  "cloud",
-];
+// "cloud" (云端) tab hidden by product request; cloud agents still appear
+// under experts/teams via matchesChatNavScope.
+export const CHAT_NAV_SCOPES: readonly ChatNavScope[] = ["experts", "teams"];
 
 type NavAgent = {
   kind?: string | null;

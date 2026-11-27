@@ -5,13 +5,11 @@ import {
   Timer,
   SlidersHorizontal,
   Waypoints,
-  Link2,
   Database,
   Cpu,
   Users as UsersIcon,
   Activity,
   Share2,
-  Cloudy,
   Sparkles,
   Puzzle,
   Package,
@@ -63,7 +61,12 @@ export interface NavSection {
   items: NavItem[];
 }
 
-/** Every nav item key the sidebar can show. Keep in sync with `SIDEBAR_NAV_KEYS` in `octop.infra.users.preferences`. */
+/**
+ * Every nav item key the sidebar can show. Keep in sync with `SIDEBAR_NAV_KEYS`
+ * in `octop.infra.users.preferences` — "bridge" and "connectors" are
+ * deliberately dashboard-hidden (nav entries removed) yet kept server-side so
+ * legacy stored layouts still validate.
+ */
 export const SIDEBAR_NAV_KEYS = [
   "chat",
   "experts",
@@ -71,10 +74,8 @@ export const SIDEBAR_NAV_KEYS = [
   "token-usage",
   "personalization",
   "channels",
-  "connectors",
   "skill-packages",
   "knowledge-bases",
-  "bridge",
   "workbench",
   "remote-desktop",
   "acp",
@@ -202,14 +203,8 @@ export function buildNavSections(
       labelKey: "nav.channels",
     });
   }
-  if (navAllowed(user, "connectors")) {
-    settingsItems.push({
-      key: "connectors",
-      path: "/connectors",
-      icon: <Link2 size={iconSize} strokeWidth={iconStroke} />,
-      labelKey: "nav.connectors",
-    });
-  }
+  // connectors (连接器) nav entry hidden by product request; the customizer
+  // catalog is built from these sections, so it cannot be re-added there.
   if (navAllowed(user, "skill-packages")) {
     settingsItems.push({
       key: "skill-packages",
@@ -226,14 +221,7 @@ export function buildNavSections(
       labelKey: "nav.knowledgeBases",
     });
   }
-  if (navAllowed(user, "bridge")) {
-    settingsItems.push({
-      key: "bridge",
-      path: "/bridge",
-      icon: <Cloudy size={iconSize} strokeWidth={iconStroke} />,
-      labelKey: "nav.bridge",
-    });
-  }
+  // bridge (云端协同) nav entry hidden by product request.
   if (settingsItems.length > 0) {
     sections.push({
       id: "settings",

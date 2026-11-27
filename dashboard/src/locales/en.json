@@ -6374,7 +6374,7 @@
     "label": "Who can use this",
     "owner": "Only me",
     "all": "Everyone",
-    "groups": "Specific user groups",
+    "groups": "Specific groups",
     "department": "My department",
     "groupPlaceholder": "Choose at least one user group",
     "needGroup": "Choose at least one user group",

@@ -20,6 +20,9 @@ PREFERENCES_KEY_SIDEBAR_NAV = "sidebar_nav"
 PREFERENCES_KEY_ONBOARDING_COMPLETED = "onboarding_completed"
 
 # Keep in sync with dashboard/src/layouts/sidebarNav.tsx SIDEBAR_NAV_KEYS.
+# "bridge" and "connectors" are hidden from the dashboard nav (not offered to
+# new layouts) but kept here so legacy stored layouts that place them still
+# validate on read.
 SIDEBAR_NAV_KEYS = frozenset(
     {
         "chat",
