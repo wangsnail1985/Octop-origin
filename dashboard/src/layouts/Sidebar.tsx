@@ -516,21 +516,45 @@ export default function Sidebar({
     if (isMobile) onToggle();
   };
 
-  const brandInner = (
-    <>
+  const brandInner = isRailCollapsed ? (
+    // Collapsed rail: the mark itself expands the sidebar (no edge chevron).
+    <button
+      type="button"
+      className={styles.brandExpand}
+      onClick={onNavFold ?? onToggle}
+      aria-expanded={false}
+      aria-label={t("layout.expandNav", "展开导航栏")}
+      aria-keyshortcuts={railShortcutAria("toggle-nav")}
+      title={`${t("layout.expandNav", "展开导航栏")} (${railShortcutLabel(
+        "toggle-nav",
+        isMacPlatform(),
+      )})`}
+    >
       <img
-        src={isRailCollapsed ? publicUrl("logo_mark.svg") : wordmarkSrc}
+        src={publicUrl("logo_mark.svg")}
         alt="Octop"
         style={{
-          height: isRailCollapsed ? 26 : isMobile ? 38 : 36,
+          height: 26,
           width: "auto",
-          maxWidth: isRailCollapsed ? 36 : isMobile ? 190 : 160,
+          maxWidth: 36,
           objectFit: "contain",
           display: "block",
-          flexShrink: 0,
         }}
       />
-    </>
+    </button>
+  ) : (
+    <img
+      src={wordmarkSrc}
+      alt="Octop"
+      style={{
+        height: isMobile ? 38 : 36,
+        width: "auto",
+        maxWidth: isMobile ? 190 : 160,
+        objectFit: "contain",
+        display: "block",
+        flexShrink: 0,
+      }}
+    />
   );
 
   const userFooter = (
@@ -830,7 +854,7 @@ export default function Sidebar({
 
   // Desktop: custom sidebar with icon-only collapsed mode.
   // Expanded: fold control sits in the brand row, right of the version.
-  // Collapsed: the seam's center chevron expands it, so the mark stays clear.
+  // Collapsed: clicking the mark itself expands the rail.
   return (
     <div className={styles.navRailHost}>
       <div

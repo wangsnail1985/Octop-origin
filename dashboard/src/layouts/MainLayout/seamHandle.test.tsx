@@ -130,14 +130,12 @@ describe("左侧导航接缝", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("导航收起时竖线中间是展开按钮", () => {
+  it("导航收起时接缝不再提供展开按钮（展开由侧栏 logo 点击承担）", () => {
     localStorage.setItem("octop:sidebar:collapsed", "true");
     render(<MainLayout />);
-    const button = screen.getByRole("button", { name: "展开导航栏" });
-    expect(button).toHaveAttribute("aria-expanded", "false");
-    expect(button.querySelector("svg")?.getAttribute("class")).toContain(
-      "chevron-right",
-    );
+    expect(
+      screen.queryByRole("button", { name: "展开导航栏" }),
+    ).not.toBeInTheDocument();
   });
 
   it("不在对话路由上时不提供展开对话历史", () => {

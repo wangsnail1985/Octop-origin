@@ -83,10 +83,12 @@ describe("nav rail fold control", () => {
   });
 
   it("does not cover the mark when the rail is collapsed", () => {
-    renderSidebar({ collapsed: true });
-    expect(
-      screen.queryByRole("button", { name: /收起导航栏|展开导航栏/ }),
-    ).not.toBeInTheDocument();
+    const { container } = renderSidebar({ collapsed: true });
+    // The mark itself acts as the expand control now.
+    const expandBtn = container
+      .querySelector("button img[src*='logo_mark.svg']")
+      ?.closest("button");
+    expect(expandBtn).toBeTruthy();
   });
 
   it("leaves room for the traffic lights", () => {

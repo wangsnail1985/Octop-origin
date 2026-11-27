@@ -307,6 +307,9 @@ export default function MainLayout() {
                   expanded={!collapsed}
                   onToggle={handleNavRailToggle}
                   side="end"
+                  /* Collapsed: keep the divider line only — expansion is the
+                     logo-mark click; the chevron button would duplicate it. */
+                  showToggle={!collapsed}
                   label={
                     collapsed
                       ? t("layout.expandNav", "展开导航栏")
