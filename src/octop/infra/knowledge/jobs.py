@@ -14,7 +14,8 @@ from octop.infra.knowledge.graph import enqueue_document_graph, mark_document_re
 from octop.infra.knowledge.ocr import optional_ocr_extractor
 from octop.infra.knowledge.params import get_advanced_settings
 from octop.infra.knowledge.parse import parse_document_pages
-from octop.infra.knowledge.plane import open_knowledge_index
+from octop.infra.knowledge.plane import open_knowledge_index, open_page_index
+from octop.infra.knowledge.tree import build_nodes
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,11 @@ def process_document(services: Any, kb_id: str, doc_id: str) -> None:
             pages=[chunk.page for chunk in chunks],
             anchors=[chunk.anchor for chunk in chunks],
         )
+        try:
+            open_page_index(services, kb_id).replace_doc_nodes(doc_id, build_nodes(pages, doc_id))
+        except Exception:
+            # The tree is one retrieval path; indexing succeeds without it.
+            logger.warning("knowledge page tree build skipped for %s", doc_id, exc_info=True)
         dimension = len(embeddings[0]) if embeddings else 0
         repo.update_document(doc_id, status="ready", error_message="", chunk_count=len(chunks))
         if dimension and base.embedding_dim != dimension:

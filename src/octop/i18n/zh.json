@@ -827,6 +827,9 @@
     "image_unavailable": "[附件] 图片无法加载到模型。"
   },
   "knowledge": {
+    "pageindex": {
+      "llm_prompt": "以下是知识库的节点目录（格式：节点ID\\t编号\\t摘要）。从目录中选出与问题最相关的最多 {k} 个节点，只返回由这些节点 ID 组成的 JSON 字符串数组，不要输出任何其他内容。\n\n目录：\n{catalog}\n\n问题：{query}"
+    },
     "retrieval": {
       "citation_anchor": "[知识库：{name}｜来源：{filename}｜{anchor}]\n",
       "citation_chunk": "[知识库：{name}｜来源：{filename}｜第{ordinal}段]\n",

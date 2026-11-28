@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from octop.i18n import tr
 from octop.infra.knowledge.citations import append_citations_marker, citations_from_ranked
 from octop.infra.knowledge.embed import embed_knowledge_texts
+from octop.infra.knowledge.factroute import fact_boost_enabled, is_fact_query
 from octop.infra.knowledge.fuse import dedupe_key, rrf_fuse
 from octop.infra.knowledge.gate import assert_knowledge_usable
 from octop.infra.knowledge.graph import (
@@ -20,8 +21,10 @@ from octop.infra.knowledge.graph import (
     open_knowledge_graph,
 )
 from octop.infra.knowledge.index import Hit
-from octop.infra.knowledge.plane import open_knowledge_index
+from octop.infra.knowledge.page_index import build_pageindex_chat_model
+from octop.infra.knowledge.plane import open_knowledge_index, open_page_index
 from octop.infra.knowledge.rerank import candidate_count, get_rerank_capability, rerank_scores
+from octop.infra.knowledge.tree import TreeNode
 
 DEFAULT_RETRIEVAL_K = 8
 DEFAULT_CONTEXT_CHAR_BUDGET = 6000
@@ -103,8 +106,10 @@ def _retrieve_context_sync(
     use_graph = graph_enabled(services)
     vector_entries: list[tuple[Any, Hit, Any]] = []
     lexicon_entries: list[tuple[Any, Hit, Any]] = []
+    tree_entries: list[tuple[Any, Hit, Any]] = []
     facts: list[str] = []
     related: list[tuple[Any, Any, int]] = []
+    tree_model: Any = None
     for kb_id in selected_ids:
         base = visible_by_id.get(kb_id)
         if base is None:
@@ -126,6 +131,18 @@ def _retrieve_context_sync(
                     lexicon_entries.append((base, hit, document))
         except Exception:
             logger.warning("knowledge lexicon search skipped for %s", kb_id, exc_info=True)
+        try:
+            if tree_model is None:
+                tree_model = build_pageindex_chat_model(services)
+            page_index = open_page_index(services, kb_id)
+            for node in _search_tree(
+                page_index, (query or "").strip(), k=fetch_k, chat_model=tree_model
+            ):
+                document = ready_documents.get(node.doc_id)
+                if document is not None:
+                    tree_entries.append((base, _node_hit(node), document))
+        except Exception:
+            logger.warning("knowledge page-index search skipped for %s", kb_id, exc_info=True)
         if use_graph:
             expansion = _expand(services, kb_id, query or "")
             facts.extend(expansion.facts)
@@ -135,18 +152,65 @@ def _retrieve_context_sync(
                 if doc_id in ready_documents
             )
 
-    ranked = _fuse_entries(vector_entries, lexicon_entries)
+    ranked = _fuse_entries(
+        {"vector": vector_entries, "lexicon": lexicon_entries, "tree": tree_entries}
+    )
+    ranked = _boost_fact_hits(services, ranked, tree_entries, query or "")
     if rerank:
         ranked = _rerank(services, (query or "").strip(), ranked[:fetch_k])
     top = _with_graph_passages(services, ranked[:k], related, k=k)
     return _format_context(top, char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS])
 
 
-def _fuse_entries(
-    vector_entries: Sequence[tuple[Any, Hit, Any]],
-    lexicon_entries: Sequence[tuple[Any, Hit, Any]],
+def _search_tree(page_index: Any, query: str, *, k: int, chat_model: Any) -> list[TreeNode]:
+    """LLM node picking when configured; keyword scoring as the floor."""
+    if chat_model is not None:
+        picked = page_index.search_llm(query, k, chat_model)
+        if picked is not None:
+            return cast("list[TreeNode]", picked)
+    return cast("list[TreeNode]", page_index.search_keyword(query, k))
+
+
+def _node_hit(node: TreeNode) -> Hit:
+    return Hit(
+        chunk_id=node.node_id,
+        doc_id=node.doc_id,
+        ordinal=node.position,
+        text=node.content,
+        score=0.0,
+        metadata={},
+        page=node.page,
+        anchor=node.anchor,
+    )
+
+
+def _boost_fact_hits(
+    services: Any,
+    ranked: Sequence[tuple[Any, Hit, Any]],
+    tree_entries: Sequence[tuple[Any, Hit, Any]],
+    query: str,
 ) -> list[tuple[Any, Hit, Any]]:
-    """Fuse the vector and exact-term paths with reciprocal-rank fusion.
+    """Fact-style queries pin up to two page-index hits at the top."""
+    if not ranked or not tree_entries:
+        return list(ranked)
+    if not fact_boost_enabled(services.settings_repo.get) or not is_fact_query(query):
+        return list(ranked)
+    tree_keys = {dedupe_key(hit) for _, hit, _ in tree_entries}
+    boost_positions = [
+        position for position, entry in enumerate(ranked) if dedupe_key(entry[1]) in tree_keys
+    ][:2]
+    if not boost_positions:
+        return list(ranked)
+    pinned = set(boost_positions)
+    return [ranked[i] for i in boost_positions] + [
+        entry for i, entry in enumerate(ranked) if i not in pinned
+    ]
+
+
+def _fuse_entries(
+    engines: dict[str, Sequence[tuple[Any, Hit, Any]]],
+) -> list[tuple[Any, Hit, Any]]:
+    """Fuse the retrieval engines with reciprocal-rank fusion.
 
     Entries sharing one ``(doc, anchor)`` key keep a single vote at their best
     rank, so a section fragmented into many windows cannot outvote a strong hit.
@@ -160,7 +224,7 @@ def _fuse_entries(
             hits.append(hit)
         return hits
 
-    fused = rrf_fuse({"vector": hits_of(vector_entries), "lexicon": hits_of(lexicon_entries)})
+    fused = rrf_fuse({name: hits_of(entries) for name, entries in engines.items()})
     return [(registry[dedupe_key(hit)][0], hit, registry[dedupe_key(hit)][2]) for hit in fused]
 
 

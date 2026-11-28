@@ -827,6 +827,9 @@
     "image_unavailable": "[Attachment] Image could not be loaded for the model."
   },
   "knowledge": {
+    "pageindex": {
+      "llm_prompt": "Below is a catalog of knowledge nodes (format: node_id\\tpath\\tsummary). Pick at most {k} nodes most relevant to the question and return only a JSON array of their node ids, with no other text.\n\nCatalog:\n{catalog}\n\nQuestion: {query}"
+    },
     "retrieval": {
       "citation_anchor": "[Knowledge base: {name} | Source: {filename} | {anchor}]\n",
       "citation_chunk": "[Knowledge base: {name} | Source: {filename} | chunk {ordinal}]\n",

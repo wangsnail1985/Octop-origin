@@ -27,7 +27,7 @@ from octop.infra.knowledge.ocr import (
     optional_ocr_extractor,
 )
 from octop.infra.knowledge.parse import parse_document
-from octop.infra.knowledge.plane import open_knowledge_index, postgres_database
+from octop.infra.knowledge.plane import open_knowledge_index, open_page_index, postgres_database
 from octop.infra.knowledge.relpath import normalize_kb_path, path_basename, path_parent
 
 logger = logging.getLogger(__name__)
@@ -444,6 +444,7 @@ class KnowledgeService:
                 continue
             open_knowledge_index(self._services, kb_id).delete_doc(row.id)
             open_knowledge_graph(self._services, kb_id).delete_document(row.id)
+            open_page_index(self._services, kb_id).delete_doc(row.id)
             self._blobs().delete(kb_id, row.id, row.filename)
 
     def reindex_document(
@@ -703,9 +704,11 @@ class KnowledgeService:
         self.require_owner(kb_id, actor_user_id=actor_user_id, is_admin=is_admin)
         database = postgres_database(self._services)
         if database is not None:
+            from octop.infra.knowledge.page_index import PgPageIndex
             from octop.infra.knowledge.pg_index import PgVectorKnowledgeIndex
 
             PgVectorKnowledgeIndex(kb_id, database).delete_kb()
+            PgPageIndex(kb_id, database).delete_kb()
             open_knowledge_graph(self._services, kb_id).clear()
         self._repo.delete_base(kb_id)
         from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, GroupAccess

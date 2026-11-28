@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from octop.config import DatabaseConfig
 from octop.infra.knowledge.index import KnowledgeIndex
+from octop.infra.knowledge.page_index import PageIndexStore, PgPageIndex, SqlitePageIndex
 from octop.infra.knowledge.pg_index import PgVectorKnowledgeIndex
 
 
@@ -35,3 +36,11 @@ def open_knowledge_index(services: Any, kb_id: str) -> KnowledgeIndex | PgVector
     if database is None:
         return KnowledgeIndex(kb_id)
     return PgVectorKnowledgeIndex(kb_id, database)
+
+
+def open_page_index(services: Any, kb_id: str) -> PageIndexStore:
+    """Page-index tree in the sidecar, or the PG table on PostgreSQL."""
+    database = postgres_database(services)
+    if database is None:
+        return SqlitePageIndex(kb_id)
+    return PgPageIndex(kb_id, database)

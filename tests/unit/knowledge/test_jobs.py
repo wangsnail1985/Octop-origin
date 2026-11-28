@@ -116,6 +116,66 @@ def test_process_document_indexes_chunks_and_marks_ready(
     assert KnowledgeIndex(kb.id).search([1.0, 0.0], 1)[0].doc_id == doc.id
 
 
+def test_process_document_writes_anchored_chunks_and_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from octop.infra.knowledge.page_index import SqlitePageIndex
+
+    monkeypatch.setenv("OCTOP_HOME", str(tmp_path / "home"))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    repo = KnowledgeRepo(pool)
+    owner_id = UserRepo(pool).create(username="owner", password_hash="h", role="user")
+    kb = repo.create_base(owner_user_id=owner_id, name="Docs", embedding_model="m")
+    doc = repo.create_document(
+        kb_id=kb.id, filename="policy.md", content_type="text/markdown", byte_size=10
+    )
+    write_document(kb.id, doc.id, doc.filename, "前言\n\n# 6 报销\n\n票据三日内提交".encode())
+    services = SimpleNamespace(knowledge_repo=repo, settings_repo=SettingsRepo(pool))
+    monkeypatch.setattr(jobs, "assert_knowledge_usable", lambda *_args: None)
+    monkeypatch.setattr(
+        jobs, "embed_knowledge_texts", lambda _services, texts: [[1.0, 0.0] for _ in texts]
+    )
+
+    jobs.process_document(services, kb.id, doc.id)
+
+    hit = KnowledgeIndex(kb.id).search([1.0, 0.0], 1)[0]
+    assert hit.anchor in {"¶0", "§6 报销"}
+    nodes = SqlitePageIndex(kb.id).doc_node_rows(doc.id)
+    assert [node.anchor for node in nodes] == ["¶0", "§6 报销"]
+
+
+def test_process_document_succeeds_when_tree_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOP_HOME", str(tmp_path / "home"))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    repo = KnowledgeRepo(pool)
+    owner_id = UserRepo(pool).create(username="owner", password_hash="h", role="user")
+    kb = repo.create_base(owner_user_id=owner_id, name="Docs", embedding_model="m")
+    doc = repo.create_document(
+        kb_id=kb.id, filename="notes.md", content_type="text/markdown", byte_size=5
+    )
+    write_document(kb.id, doc.id, doc.filename, b"hello")
+    services = SimpleNamespace(knowledge_repo=repo, settings_repo=SettingsRepo(pool))
+    monkeypatch.setattr(jobs, "assert_knowledge_usable", lambda *_args: None)
+    monkeypatch.setattr(
+        jobs, "embed_knowledge_texts", lambda _services, texts: [[1.0, 0.0] for _ in texts]
+    )
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("page tree storage is unavailable")
+
+    monkeypatch.setattr(jobs, "build_nodes", boom)
+
+    jobs.process_document(services, kb.id, doc.id)
+
+    updated = repo.get_document(doc.id)
+    assert updated is not None
+    assert updated.status == "ready"
+
+
 def test_process_document_skips_a_document_moved_to_another_base(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
