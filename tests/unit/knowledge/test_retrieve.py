@@ -207,8 +207,10 @@ def test_retrieve_context_small_k_keeps_vector_passages(tmp_path, monkeypatch) -
 
     context = _retrieve(services, owner, base, k=2)
 
-    assert "Apollo overview" in context and "Apollo timeline" in context
-    assert "Budget rules" not in context
+    # The graph path holds a fused slot (k/2 quota): the linked passage rides
+    # alongside the best vector hit instead of being crowded out entirely.
+    assert "Apollo overview" in context
+    assert "Budget rules" in context
     assert "is funded by" in context
 
 

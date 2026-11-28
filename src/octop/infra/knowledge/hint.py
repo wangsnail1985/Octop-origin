@@ -9,7 +9,13 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain_core.tools.base import BaseTool
 from langgraph.config import get_config
 
-from octop.infra.knowledge.tools import SEARCH_KNOWLEDGE_TOOL, format_search_knowledge_description
+from octop.infra.knowledge.tools import (
+    COUNT_OCCURRENCES_TOOL,
+    SEARCH_KNOWLEDGE_TOOL,
+    format_search_knowledge_description,
+)
+
+_TURN_SCOPED_TOOLS = frozenset({SEARCH_KNOWLEDGE_TOOL, COUNT_OCCURRENCES_TOOL})
 
 
 def catalog_for_selected_bases(
@@ -68,7 +74,7 @@ def _with_enriched_tool_description(request: ModelRequest[Any]) -> ModelRequest[
         filtered = [
             tool
             for tool in tools_in
-            if not (isinstance(tool, BaseTool) and tool.name == SEARCH_KNOWLEDGE_TOOL)
+            if not (isinstance(tool, BaseTool) and tool.name in _TURN_SCOPED_TOOLS)
         ]
         if len(filtered) == len(tools_in):
             return request

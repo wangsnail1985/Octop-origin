@@ -18,6 +18,7 @@ from octop.infra.knowledge.graph import (
     GraphExpansion,
     expand_query,
     graph_enabled,
+    llm_query_entities,
     open_knowledge_graph,
 )
 from octop.infra.knowledge.index import Hit
@@ -28,9 +29,10 @@ from octop.infra.knowledge.tree import TreeNode
 
 DEFAULT_RETRIEVAL_K = 8
 DEFAULT_CONTEXT_CHAR_BUDGET = 6000
-# Share of the returned passages, and of the character budget, the graph may claim.
-_GRAPH_PASSAGE_DIVISOR = 4
+# Share of the character budget the graph fact block may claim.
 _GRAPH_FACT_BUDGET_DIVISOR = 5
+# The graph path competes in fusion with a tightened quota (kb-test value).
+_GRAPH_TOP_N_DIVISOR = 2
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +106,13 @@ def _retrieve_context_sync(
     fetch_k = candidate_count(k) if rerank else k
 
     use_graph = graph_enabled(services)
+    tree_model: Any = None
     vector_entries: list[tuple[Any, Hit, Any]] = []
     lexicon_entries: list[tuple[Any, Hit, Any]] = []
     tree_entries: list[tuple[Any, Hit, Any]] = []
+    graph_entries: list[tuple[Any, Hit, Any]] = []
     facts: list[str] = []
-    related: list[tuple[Any, Any, int]] = []
-    tree_model: Any = None
+    graph_quota = max(k // _GRAPH_TOP_N_DIVISOR, 1)
     for kb_id in selected_ids:
         base = visible_by_id.get(kb_id)
         if base is None:
@@ -144,22 +147,93 @@ def _retrieve_context_sync(
         except Exception:
             logger.warning("knowledge page-index search skipped for %s", kb_id, exc_info=True)
         if use_graph:
-            expansion = _expand(services, kb_id, query or "")
+            expansion = _expand(services, kb_id, query or "", chat_model=tree_model)
             facts.extend(expansion.facts)
-            related.extend(
-                (base, ready_documents[doc_id], ordinal)
-                for doc_id, ordinal in expansion.chunks
-                if doc_id in ready_documents
-            )
+            chunk_texts: dict[str, dict[int, str]] = {}
+            for doc_id, ref in expansion.chunks[:graph_quota]:
+                document = ready_documents.get(doc_id)
+                if document is None:
+                    continue
+                entry = _graph_entry(
+                    services,
+                    kb_id,
+                    base,
+                    document,
+                    doc_id,
+                    ref,
+                    node_level=doc_id in expansion.node_docs,
+                    chunk_texts=chunk_texts,
+                )
+                if entry is not None:
+                    graph_entries.append(entry)
 
     ranked = _fuse_entries(
-        {"vector": vector_entries, "lexicon": lexicon_entries, "tree": tree_entries}
+        {
+            "vector": vector_entries,
+            "lexicon": lexicon_entries,
+            "tree": tree_entries,
+            "graph": graph_entries,
+        }
     )
     ranked = _boost_fact_hits(services, ranked, tree_entries, query or "")
     if rerank:
         ranked = _rerank(services, (query or "").strip(), ranked[:fetch_k])
-    top = _with_graph_passages(services, ranked[:k], related, k=k)
-    return _format_context(top, char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS])
+    return _format_context(
+        ranked[:k], char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS]
+    )
+
+
+def _graph_entry(
+    services: Any,
+    kb_id: str,
+    base: Any,
+    document: Any,
+    doc_id: str,
+    ref: int,
+    *,
+    node_level: bool,
+    chunk_texts: dict[str, dict[int, str]],
+) -> tuple[Any, Hit, Any] | None:
+    """Materialize one graph-referenced passage as a fusion entry.
+
+    Node-level graphs reference tree positions; legacy graphs reference chunk
+    ordinals. Either way the passage competes through fusion like any engine.
+    """
+    if node_level:
+        node = open_page_index(services, kb_id).node_at(doc_id, ref)
+        if node is None or not node.content:
+            return None
+        return (
+            base,
+            Hit(
+                chunk_id=f"{doc_id}:n{ref}",
+                doc_id=doc_id,
+                ordinal=ref,
+                text=node.content,
+                score=0.0,
+                metadata={},
+                page=node.page,
+                anchor=node.anchor,
+            ),
+            document,
+        )
+    if doc_id not in chunk_texts:
+        chunk_texts[doc_id] = dict(open_knowledge_index(services, kb_id).list_doc_chunks(doc_id))
+    text = chunk_texts[doc_id].get(ref)
+    if text is None:
+        return None
+    return (
+        base,
+        Hit(
+            chunk_id=f"{doc_id}:{ref}",
+            doc_id=doc_id,
+            ordinal=ref,
+            text=text,
+            score=0.0,
+            metadata={},
+        ),
+        document,
+    )
 
 
 def _search_tree(page_index: Any, query: str, *, k: int, chat_model: Any) -> list[TreeNode]:
@@ -228,50 +302,19 @@ def _fuse_entries(
     return [(registry[dedupe_key(hit)][0], hit, registry[dedupe_key(hit)][2]) for hit in fused]
 
 
-def _expand(services: Any, kb_id: str, query: str) -> GraphExpansion:
-    """Graph lookups are an addition; a failure leaves plain vector retrieval."""
+def _expand(services: Any, kb_id: str, query: str, *, chat_model: Any = None) -> GraphExpansion:
+    """Graph lookups are an addition; a failure leaves plain vector retrieval.
+
+    With a chat model (advanced mode) the query is first enriched with entity
+    names the model reads out of it, so paraphrased mentions still link.
+    """
     try:
-        return expand_query(open_knowledge_graph(services, kb_id), query)
+        store = open_knowledge_graph(services, kb_id)
+        seeds = llm_query_entities(query, chat_model) if chat_model is not None else ()
+        return expand_query(store, query, extra_seeds=seeds)
     except Exception:
         logger.warning("knowledge graph lookup skipped for %s", kb_id, exc_info=True)
         return GraphExpansion()
-
-
-def _with_graph_passages(
-    services: Any,
-    top: list[tuple[Any, Hit, Any]],
-    related: Sequence[tuple[Any, Any, int]],
-    *,
-    k: int,
-) -> list[tuple[Any, Hit, Any]]:
-    """Give the last few slots to graph-linked passages the vector search missed.
-
-    These passages are connected to the question through an entity rather
-    than by wording, so they would never win on similarity; they take at
-    most a quarter of the result instead of competing on score.
-    """
-    slots = k // _GRAPH_PASSAGE_DIVISOR
-    if slots <= 0 or not related:
-        return top
-    present = {hit.chunk_id for _, hit, _ in top}
-    texts: dict[str, dict[int, str]] = {}
-    extra: list[tuple[Any, Hit, Any]] = []
-    for base, document, ordinal in related:
-        chunk_id = f"{document.id}:{ordinal}"
-        if chunk_id in present:
-            continue
-        if document.id not in texts:
-            texts[document.id] = dict(
-                open_knowledge_index(services, base.id).list_doc_chunks(document.id)
-            )
-        text = texts[document.id].get(ordinal)
-        if text is None:
-            continue
-        present.add(chunk_id)
-        extra.append((base, Hit(chunk_id, document.id, ordinal, text, 0.0, {}), document))
-        if len(extra) == slots:
-            break
-    return top[: max(k - len(extra), 0)] + extra
 
 
 def _rerank(

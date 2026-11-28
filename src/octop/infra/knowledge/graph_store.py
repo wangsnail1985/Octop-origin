@@ -81,6 +81,9 @@ class GraphRelation:
 class GraphDocumentState:
     status: str
     error: str = ""
+    # What one ``ordinal`` refers to in this document's graph rows: a chunk
+    # window ("chunk", the legacy unit) or a page-index tree node ("node").
+    unit: str = "chunk"
 
 
 class KnowledgeGraphStore:
@@ -148,11 +151,17 @@ class KnowledgeGraphStore:
                 doc_id TEXT NOT NULL,
                 status TEXT NOT NULL,
                 error TEXT NOT NULL DEFAULT '',
+                extract_unit TEXT NOT NULL DEFAULT 'chunk',
                 PRIMARY KEY (kb_id, doc_id)
             )
             """,
         ):
             conn.execute(statement)
+        self._upgrade(conn)
+
+    @staticmethod
+    def _upgrade(conn: Any) -> None:
+        """Driver-specific idempotent schema upgrades (no-op by default)."""
 
     @contextmanager
     def _session(self) -> Iterator[Any]:
@@ -202,20 +211,26 @@ class KnowledgeGraphStore:
                 (self._kb_id, doc_id),
             )
 
-    def _set_state(self, conn: Any, doc_id: str, status: str, error: str) -> None:
+    def _set_state(self, conn: Any, doc_id: str, status: str, error: str, unit: str) -> None:
         conn.execute(
             self._sql(f"DELETE FROM {self._documents} WHERE kb_id = ? AND doc_id = ?"),
             (self._kb_id, doc_id),
         )
         conn.execute(
             self._sql(
-                f"INSERT INTO {self._documents}(kb_id, doc_id, status, error) VALUES (?, ?, ?, ?)"
+                f"INSERT INTO {self._documents}(kb_id, doc_id, status, error, extract_unit) "
+                "VALUES (?, ?, ?, ?, ?)"
             ),
-            (self._kb_id, doc_id, status, error),
+            (self._kb_id, doc_id, status, error, unit),
         )
 
     def replace_document(
-        self, doc_id: str, chunks: Sequence[ChunkGraph], *, error: str = ""
+        self,
+        doc_id: str,
+        chunks: Sequence[ChunkGraph],
+        *,
+        error: str = "",
+        unit: str = "chunk",
     ) -> None:
         """Atomically replace everything one document contributed and mark it ready."""
         entity_rows: dict[tuple[int, str], tuple[object, ...]] = {}
@@ -274,14 +289,23 @@ class KnowledgeGraphStore:
                     ),
                     list(relation_rows.values()),
                 )
-            self._set_state(conn, doc_id, STATUS_READY, error)
+            self._set_state(conn, doc_id, STATUS_READY, error, unit)
 
     def mark_document(self, doc_id: str, status: str, *, error: str = "") -> None:
         """Record a document's graph state; anything but ``ready`` drops its rows."""
         with self._session() as conn:
+            unit = "chunk"
             if status != STATUS_READY:
                 self._delete_rows(conn, doc_id)
-            self._set_state(conn, doc_id, status, error)
+            else:
+                row = conn.execute(
+                    self._sql(
+                        f"SELECT extract_unit FROM {self._documents} WHERE kb_id = ? AND doc_id = ?"
+                    ),
+                    (self._kb_id, doc_id),
+                ).fetchone()
+                unit = str(row[0] or "chunk") if row else "chunk"
+            self._set_state(conn, doc_id, status, error, unit)
 
     def delete_document(self, doc_id: str) -> None:
         if not self._present():
@@ -305,12 +329,12 @@ class KnowledgeGraphStore:
 
     def document_states(self) -> dict[str, GraphDocumentState]:
         rows = self._fetch(
-            f"SELECT doc_id, status, error FROM {self._documents} WHERE kb_id = ?",
+            f"SELECT doc_id, status, error, extract_unit FROM {self._documents} WHERE kb_id = ?",
             (self._kb_id,),
         )
         return {
-            str(doc_id): GraphDocumentState(str(status), str(error or ""))
-            for doc_id, status, error in rows
+            str(doc_id): GraphDocumentState(str(status), str(error or ""), str(unit or "chunk"))
+            for doc_id, status, error, unit in rows
         }
 
     def exists(self) -> bool:
@@ -478,6 +502,18 @@ class SqliteKnowledgeGraphStore(KnowledgeGraphStore):
         self._prepare(conn)
         return conn
 
+    @staticmethod
+    def _upgrade(conn: Any) -> None:
+        """Mark the extraction unit on graphs written before it existed."""
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(knowledge_graph_documents)")
+        }
+        if columns and "extract_unit" not in columns:
+            conn.execute(
+                "ALTER TABLE knowledge_graph_documents "
+                "ADD COLUMN extract_unit TEXT NOT NULL DEFAULT 'chunk'"
+            )
+
 
 class PgKnowledgeGraphStore(KnowledgeGraphStore):
     """``public.knowledge_graph_*`` tables shared by every knowledge base."""
@@ -497,3 +533,10 @@ class PgKnowledgeGraphStore(KnowledgeGraphStore):
         import psycopg
 
         return psycopg.connect(self._conninfo)
+
+    @staticmethod
+    def _upgrade(conn: Any) -> None:
+        conn.execute(
+            "ALTER TABLE public.knowledge_graph_documents "
+            "ADD COLUMN IF NOT EXISTS extract_unit TEXT NOT NULL DEFAULT 'chunk'"
+        )

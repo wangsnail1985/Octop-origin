@@ -663,6 +663,7 @@
     "cronjob_delete": "Delete cron job",
     "cronjob_run_now": "Run cron job now",
     "search_knowledge": "Search knowledge base",
+    "count_occurrences": "Count term occurrences",
     "agent_list": "List experts",
     "ask_agent": "Ask expert",
     "call_agent": "Call expert",
@@ -827,6 +828,9 @@
     "image_unavailable": "[Attachment] Image could not be loaded for the model."
   },
   "knowledge": {
+    "graph": {
+      "llm_link_prompt": "Extract from the user question below the entity names likely to appear in the documents (people, organizations, products, clause names, ...). Return only a JSON array of at most 8 entity-name strings, with no other text.\n\nQuestion: {query}"
+    },
     "pageindex": {
       "llm_prompt": "Below is a catalog of knowledge nodes (format: node_id\\tpath\\tsummary). Pick at most {k} nodes most relevant to the question and return only a JSON array of their node ids, with no other text.\n\nCatalog:\n{catalog}\n\nQuestion: {query}"
     },

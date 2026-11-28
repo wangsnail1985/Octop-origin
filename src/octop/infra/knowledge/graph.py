@@ -29,7 +29,11 @@ from octop.infra.knowledge.graph_store import (
     SqliteKnowledgeGraphStore,
     entity_key,
 )
-from octop.infra.knowledge.plane import open_knowledge_index, postgres_database
+from octop.infra.knowledge.plane import (
+    open_knowledge_index,
+    open_page_index,
+    postgres_database,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,8 @@ MAX_FACTS = 8
 _MAX_ENTITY_RELATIONS = 50
 _MAX_ENTITY_PASSAGES = 10
 _MAX_PASSAGE_CHARS = 600
+# Body prefix handed to the extractor per tree node (title prepended separately).
+_NODE_TEXT_LIMIT = 300
 _ASCII_WORD_RE = re.compile(r"[a-z0-9_]")
 
 ChunkExtractor = Callable[..., ChunkGraph]
@@ -83,7 +89,12 @@ def build_document_graph(
     *,
     extractor: ChunkExtractor | None = None,
 ) -> None:
-    """Extract one indexed document's chunks and replace its part of the graph."""
+    """Extract one indexed document and replace its part of the graph.
+
+    Extraction units are page-index tree nodes when the tree exists (title plus
+    body prefix — an order of magnitude fewer model calls than chunk windows);
+    documents without a tree fall back to chunk windows and stay marked as such.
+    """
     store = open_knowledge_graph(services, kb_id)
     document = services.knowledge_repo.get_document(doc_id)
     if document is None or document.kb_id != kb_id or document.is_dir:
@@ -93,7 +104,16 @@ def build_document_graph(
     try:
         if document.status != "ready":
             raise RuntimeError("knowledge document is not indexed yet")
-        chunks = open_knowledge_index(services, kb_id).list_doc_chunks(doc_id)
+        nodes = open_page_index(services, kb_id).doc_node_rows(doc_id)
+        if nodes:
+            units: list[tuple[int, str]] = [
+                (node.position, f"{node.title}\n{node.content[:_NODE_TEXT_LIMIT]}")
+                for node in nodes
+            ]
+            unit = "node"
+        else:
+            units = open_knowledge_index(services, kb_id).list_doc_chunks(doc_id)
+            unit = "chunk"
         extract = extractor or GraphExtractor(services)
 
         def run(item: tuple[int, str]) -> ChunkGraph | None:
@@ -102,7 +122,7 @@ def build_document_graph(
                 return extract(filename=document.filename, ordinal=ordinal, text=text)
             except Exception:
                 logger.warning(
-                    "knowledge graph extraction failed for %s chunk %s",
+                    "knowledge graph extraction failed for %s unit %s",
                     doc_id,
                     ordinal,
                     exc_info=True,
@@ -110,13 +130,13 @@ def build_document_graph(
                 return None
 
         with ThreadPoolExecutor(max_workers=_CHUNK_WORKERS) as pool:
-            results = list(pool.map(run, chunks))
+            results = list(pool.map(run, units))
         extracted = [result for result in results if result is not None]
         failed = len(results) - len(extracted)
-        if chunks and not extracted:
+        if units and not extracted:
             raise RuntimeError("knowledge graph extraction failed for every passage")
         note = f"{failed} of {len(results)} passages could not be extracted" if failed else ""
-        store.replace_document(doc_id, extracted, error=note)
+        store.replace_document(doc_id, extracted, error=note, unit=unit)
     except Exception as exc:
         store.mark_document(doc_id, STATUS_FAILED, error=str(exc))
         raise
@@ -168,7 +188,13 @@ def enqueue_base_graph(services: Any, kb_id: str, doc_ids: Sequence[str]) -> int
 
 
 def resume_pending_graph_jobs(services: Any) -> None:
-    """Re-queue extraction that a previous process left queued or half done."""
+    """Re-queue extraction that a previous process left queued or half done.
+
+    A document whose graph rows still use chunk-window units is re-extracted
+    once from tree nodes when its tree exists, so an upgraded instance
+    converges on the cheaper unit without a manual rebuild. Documents without
+    a tree keep their chunk-level graph until the index itself is rebuilt.
+    """
     try:
         capability = get_graph_capability(
             services.settings_repo.get, getattr(services, "provider_repo", None)
@@ -177,8 +203,10 @@ def resume_pending_graph_jobs(services: Any) -> None:
             return
         for base in services.knowledge_repo.list_all():
             states = open_knowledge_graph(services, base.id).document_states()
+            page_index = open_page_index(services, base.id)
             for doc_id, state in states.items():
-                if state.status in (STATUS_PENDING, STATUS_PROCESSING):
+                upgradeable = state.unit != "node" and bool(page_index.doc_node_rows(doc_id))
+                if state.status in (STATUS_PENDING, STATUS_PROCESSING) or upgradeable:
                     enqueue_document_graph(services, base.id, doc_id)
     except Exception:
         # The graph is optional; trouble reading it must not stop the server from starting.
@@ -190,10 +218,61 @@ def resume_pending_graph_jobs(services: Any) -> None:
 
 @dataclass(frozen=True)
 class GraphExpansion:
-    """What the graph adds to one query against one knowledge base."""
+    """What the graph adds to one query against one knowledge base.
+
+    ``chunks`` are ``(doc_id, ordinal)`` references whose meaning depends on the
+    document's extraction unit: a tree-node position for ``node`` documents, a
+    chunk ordinal otherwise. ``node_docs`` lists the former.
+    """
 
     facts: tuple[str, ...] = ()
     chunks: tuple[tuple[str, int], ...] = ()
+    node_docs: frozenset[str] = frozenset()
+
+
+_ENTITY_CACHE_LIMIT = 128
+_entity_cache: dict[str, tuple[str, ...]] = {}
+
+
+def llm_query_entities(query: str, chat_model: Any) -> tuple[str, ...]:
+    """Entity names a small model reads out of *query* (cached, best-effort).
+
+    Substring linking misses entities the user paraphrased; the model names
+    them in the document's own wording so ``expand_query`` can seed on them.
+    Any failure returns nothing and linking falls back to the raw query.
+    """
+    text = " ".join((query or "").split())
+    if not text:
+        return ()
+    cached = _entity_cache.get(text)
+    if cached is not None:
+        return cached
+    names: tuple[str, ...] = ()
+    try:
+        import json
+
+        from langchain_core.messages import HumanMessage
+
+        from octop.i18n import tr
+        from octop.infra.utils.llm_text import llm_text_content
+
+        prompt = tr("knowledge.graph.llm_link_prompt", "en", query=text)
+        reply = llm_text_content(chat_model.invoke([HumanMessage(content=prompt)]))
+        start, end = reply.find("["), reply.rfind("]")
+        if start >= 0 and end > start:
+            decoded = json.loads(reply[start : end + 1])
+            if isinstance(decoded, list):
+                cleaned = tuple(
+                    str(item)[:80] for item in decoded if isinstance(item, str) and item.strip()
+                )
+                names = cleaned[:_MAX_SEEDS]
+    except Exception:
+        logger.debug("knowledge graph LLM entity linking failed", exc_info=True)
+        names = ()
+    _entity_cache[text] = names
+    if len(_entity_cache) > _ENTITY_CACHE_LIMIT:
+        _entity_cache.pop(next(iter(_entity_cache)))
+    return names
 
 
 def _mentions(query: str, key: str) -> bool:
@@ -213,7 +292,11 @@ def _mentions(query: str, key: str) -> bool:
 
 
 def expand_query(
-    store: KnowledgeGraphStore, query: str, *, max_facts: int = MAX_FACTS
+    store: KnowledgeGraphStore,
+    query: str,
+    *,
+    max_facts: int = MAX_FACTS,
+    extra_seeds: Sequence[str] = (),
 ) -> GraphExpansion:
     """Find entities named in *query* and collect their relations and passages.
 
@@ -222,8 +305,12 @@ def expand_query(
     documents only connect them through a shared entity.
     Passages are only taken one hop out: a relation costs a line of context,
     while a passage displaces a vector hit, and two hops away is often off topic.
+    *extra_seeds* are entity names an LLM read out of the query (advanced mode);
+    they join the raw text for substring linking.
     """
     folded = " ".join(query.split()).casefold()
+    if extra_seeds:
+        folded = f"{folded} {' '.join(seed.casefold() for seed in extra_seeds)}"
     seeds = [key for key in store.match_keys(folded) if _mentions(folded, key)]
     if not seeds:
         return GraphExpansion()
@@ -258,7 +345,9 @@ def expand_query(
     for seed in seeds:
         for ref in store.entity_chunks(seed):
             chunks.setdefault(ref)
-    return GraphExpansion(facts=tuple(facts), chunks=tuple(chunks))
+    states = store.document_states()
+    node_docs = frozenset(doc_id for doc_id, state in states.items() if state.unit == "node")
+    return GraphExpansion(facts=tuple(facts), chunks=tuple(chunks), node_docs=node_docs)
 
 
 # -- views -------------------------------------------------------------------

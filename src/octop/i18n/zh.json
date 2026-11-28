@@ -663,6 +663,7 @@
     "cronjob_delete": "删除定时任务",
     "cronjob_run_now": "立即执行定时任务",
     "search_knowledge": "检索知识库",
+    "count_occurrences": "统计术语出现次数",
     "agent_list": "列出专家",
     "ask_agent": "咨询专家",
     "call_agent": "调用专家",
@@ -827,6 +828,9 @@
     "image_unavailable": "[附件] 图片无法加载到模型。"
   },
   "knowledge": {
+    "graph": {
+      "llm_link_prompt": "从下面的用户问题中抽取可能在文档中出现的实体名称（人名、机构、产品、条款名等）。只返回由实体名称字符串组成的 JSON 数组，最多 8 个，不要输出任何其他内容。\n\n问题：{query}"
+    },
     "pageindex": {
       "llm_prompt": "以下是知识库的节点目录（格式：节点ID\\t编号\\t摘要）。从目录中选出与问题最相关的最多 {k} 个节点，只返回由这些节点 ID 组成的 JSON 字符串数组，不要输出任何其他内容。\n\n目录：\n{catalog}\n\n问题：{query}"
     },

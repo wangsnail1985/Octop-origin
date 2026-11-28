@@ -387,3 +387,78 @@ def test_entity_view_lists_relations_and_source_passages(env: SimpleNamespace) -
     ]
     with pytest.raises(LookupError, match="knowledge graph entity not found"):
         graph.entity_view(env.services, env.kb_id, "nobody")
+
+
+def test_build_extracts_tree_nodes_when_the_page_index_exists(env: SimpleNamespace) -> None:
+    from octop.infra.knowledge.page_index import SqlitePageIndex
+    from octop.infra.knowledge.parse import Page
+    from octop.infra.knowledge.tree import build_nodes
+
+    doc_id = _document(env, "plan.md", ["x" * 100])
+    pages = [
+        Page(no=None, anchor="§1 团队", text="Alice leads Apollo."),
+        Page(no=None, anchor="§2 里程碑", text="Apollo ships in May."),
+    ]
+    SqlitePageIndex(env.kb_id).replace_doc_nodes(doc_id, build_nodes(pages, doc_id))
+    calls: list[tuple[int, str]] = []
+
+    def extractor(*, filename: str, ordinal: int, text: str) -> ChunkGraph:
+        calls.append((ordinal, text))
+        return _graph(ordinal, [("Alice", "Apollo", "leads", text, 8)])
+
+    graph.build_document_graph(env.services, env.kb_id, doc_id, extractor=extractor)
+
+    store = SqliteKnowledgeGraphStore(env.kb_id)
+    assert calls == [
+        (0, "团队\nAlice leads Apollo."),
+        (1, "里程碑\nApollo ships in May."),
+    ]
+    assert store.document_states()[doc_id].unit == "node"
+
+
+def test_build_marks_chunk_units_without_a_tree(env: SimpleNamespace) -> None:
+    doc_id = _document(env, "plan.md", ["one"])
+
+    def extractor(**_kwargs: object) -> ChunkGraph:
+        return _graph(0, [("Alice", "Apollo", "leads", "", 8)])
+
+    graph.build_document_graph(env.services, env.kb_id, doc_id, extractor=extractor)
+
+    assert SqliteKnowledgeGraphStore(env.kb_id).document_states()[doc_id].unit == "chunk"
+
+
+def test_llm_query_entities_parses_and_survives_failures() -> None:
+    class _Model:
+        def __init__(self, reply: object) -> None:
+            self._reply = reply
+
+        def invoke(self, _messages: object) -> object:
+            if isinstance(self._reply, Exception):
+                raise self._reply
+            return self._reply
+
+    assert graph.llm_query_entities("谁负责 Apollo?", _Model('["Alice","Apollo 项目"]')) == (
+        "Alice",
+        "Apollo 项目",
+    )
+    assert graph.llm_query_entities("junk", _Model("no json here")) == ()
+    assert graph.llm_query_entities("boom", _Model(RuntimeError("model down"))) == ()
+    assert graph.llm_query_entities("", _Model("[]")) == ()
+
+
+def test_expand_query_seeds_on_extra_llm_names(env: SimpleNamespace) -> None:
+    doc_id = _document(env, "plan.md", ["The programme funds the lab."])
+    store = SqliteKnowledgeGraphStore(env.kb_id)
+    store.replace_document(
+        doc_id,
+        [_graph(0, [("apollo programme", "finance board", "is funded by", "", 9)])],
+        unit="node",
+    )
+
+    # The raw query never names the entity; the extra seed links it.
+    plain = graph.expand_query(store, "who pays for it?")
+    seeded = graph.expand_query(store, "who pays for it?", extra_seeds=["Apollo programme"])
+
+    assert plain.chunks == ()
+    assert (doc_id, 0) in seeded.chunks
+    assert doc_id in seeded.node_docs

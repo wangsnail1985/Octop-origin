@@ -24,6 +24,7 @@ HITL_TOOL_EXCLUDE: frozenset[str] = frozenset(
         "memory_save",
         # Knowledge base
         "search_knowledge",
+        "count_occurrences",
         # Cron
         "cronjob_list",
         "cronjob_get",

@@ -120,3 +120,99 @@ async def test_search_knowledge_empty_hits_message() -> None:
     ):
         out = await tool.ainvoke({"query": "nothing"})
     assert "No relevant passages found" in out
+
+
+@pytest.mark.asyncio
+async def test_count_occurrences_counts_exactly_with_anchors(tmp_path, monkeypatch) -> None:
+    import json as jsonlib
+
+    from octop.infra.db.migrate import run_migrations
+    from octop.infra.db.pool import SqlitePool
+    from octop.infra.db.repos.knowledge import KnowledgeRepo
+    from octop.infra.db.repos.settings import SettingsRepo
+    from octop.infra.db.repos.users import UserRepo
+    from octop.infra.knowledge.page_index import SqlitePageIndex
+    from octop.infra.knowledge.parse import Page
+    from octop.infra.knowledge.tree import build_nodes
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("OCTOP_HOME", str(home))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    repo = KnowledgeRepo(pool)
+    owner = UserRepo(pool).create(username="owner", password_hash="h", role="user")
+    base = repo.create_base(owner_user_id=owner, name="Docs")
+    document = repo.create_document(
+        kb_id=base.id,
+        filename="policy.md",
+        content_type="text/markdown",
+        byte_size=1,
+        status="ready",
+    )
+    SqlitePageIndex(base.id).replace_doc_nodes(
+        document.id,
+        build_nodes(
+            [
+                Page(no=None, anchor="§6 报销", text="报销 一次 报销"),
+                Page(no=None, anchor="§7 其他", text="无关内容 报销"),
+            ],
+            document.id,
+        ),
+    )
+    services = SimpleNamespace(
+        knowledge_repo=repo, settings_repo=SettingsRepo(pool), provider_repo=None
+    )
+    tool = _tool_by_name(build_knowledge_tools(services), "count_occurrences")
+
+    with _configurable(user=str(owner), user_is_admin=False, knowledge_base_ids=[base.id]):
+        out = await tool.ainvoke({"query": "报销"})
+
+    payload = jsonlib.loads(out)
+    assert payload["total"] == 3
+    assert payload["documents"][0]["filename"] == "policy.md"
+    assert payload["documents"][0]["total"] == 3
+    sections = payload["documents"][0]["sections"]
+    assert sections[0]["anchor"] == "§6 报销"
+    assert sections[0]["count"] == 2
+    assert sections[1]["count"] == 1
+    assert "approximate" not in payload
+
+
+@pytest.mark.asyncio
+async def test_count_occurrences_returns_zero_for_missing_terms(tmp_path, monkeypatch) -> None:
+    import json as jsonlib
+
+    from octop.infra.db.migrate import run_migrations
+    from octop.infra.db.pool import SqlitePool
+    from octop.infra.db.repos.knowledge import KnowledgeRepo
+    from octop.infra.db.repos.settings import SettingsRepo
+    from octop.infra.db.repos.users import UserRepo
+    from octop.infra.knowledge.index import KnowledgeIndex
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("OCTOP_HOME", str(home))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    repo = KnowledgeRepo(pool)
+    owner = UserRepo(pool).create(username="owner", password_hash="h", role="user")
+    base = repo.create_base(owner_user_id=owner, name="Docs")
+    document = repo.create_document(
+        kb_id=base.id,
+        filename="plan.md",
+        content_type="text/markdown",
+        byte_size=1,
+        status="ready",
+    )
+    # No tree: chunk fallback counting, flagged approximate.
+    KnowledgeIndex(base.id).replace_doc_chunks(document.id, ["plain body"], [[1.0, 0.0]])
+    services = SimpleNamespace(
+        knowledge_repo=repo, settings_repo=SettingsRepo(pool), provider_repo=None
+    )
+    tool = _tool_by_name(build_knowledge_tools(services), "count_occurrences")
+
+    with _configurable(user=str(owner), user_is_admin=False, knowledge_base_ids=[base.id]):
+        out = await tool.ainvoke({"query": "不存在术语"})
+
+    payload = jsonlib.loads(out)
+    assert payload["total"] == 0
+    assert payload["documents"] == []
