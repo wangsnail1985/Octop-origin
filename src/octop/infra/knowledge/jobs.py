@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from octop.infra.knowledge.blobs import KnowledgeBlobs
@@ -51,7 +52,9 @@ def process_document(services: Any, kb_id: str, doc_id: str) -> None:
     repo.update_document(doc_id, status="processing", error_message="")
     try:
         path = KnowledgeBlobs.from_services(services).ensure_local(kb_id, doc_id, document.filename)
-        pages = parse_document_pages(path, ocr=optional_ocr_extractor(services))
+        pages = parse_document_pages(
+            path, ocr=optional_ocr_extractor(services), title=Path(document.filename).stem
+        )
         knobs = get_advanced_settings(services.settings_repo.get)
         chunks = chunk_pages(pages, size=knobs["chunk_size"], overlap=knobs["chunk_overlap"])
         if not any(unit.text.strip() for unit in pages) or not chunks:

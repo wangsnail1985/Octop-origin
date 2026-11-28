@@ -314,8 +314,14 @@ def _xlsx_row_rows(sheet: Any) -> list[tuple[int, list[object]]]:
     ]
 
 
-def parse_document_pages(path: Path, *, ocr: OcrExtractor | None = None) -> list[Page]:
-    """Extract anchor-bearing page units from a supported local document."""
+def parse_document_pages(
+    path: Path, *, ocr: OcrExtractor | None = None, title: str | None = None
+) -> list[Page]:
+    """Extract anchor-bearing page units from a supported local document.
+
+    *title* overrides the file stem in sheet anchors (csv/tsv), so a document
+    stored under its internal id can still cite the uploaded filename.
+    """
     suffix = path.suffix.lower()
     if suffix in OCR_IMAGE_SUFFIXES:
         if ocr is None:
@@ -332,7 +338,7 @@ def parse_document_pages(path: Path, *, ocr: OcrExtractor | None = None) -> list
         return _html_pages(_read_text(path))
     if suffix == ".csv":
         return _sheet_row_pages(
-            path.stem,
+            title or path.stem,
             [
                 (row_no, list(row))
                 for row_no, row in enumerate(
@@ -342,7 +348,7 @@ def parse_document_pages(path: Path, *, ocr: OcrExtractor | None = None) -> list
         )
     if suffix == ".tsv":
         return _sheet_row_pages(
-            path.stem,
+            title or path.stem,
             [
                 (row_no, list(row))
                 for row_no, row in enumerate(
