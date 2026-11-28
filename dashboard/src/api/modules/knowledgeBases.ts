@@ -53,8 +53,17 @@ export interface KnowledgeCapability {
     ready: boolean;
     usable: boolean;
   };
+  /** Small model for advanced retrieval; absent on servers without it. */
+  pageindex_llm?: {
+    provider_id: string;
+    model: string;
+    ready: boolean;
+    usable: boolean;
+  };
   limits?: KnowledgeLimits;
 }
+
+export type KnowledgeRetrievalMode = "basic" | "advanced";
 
 export interface KnowledgeBase {
   id: string;
@@ -77,6 +86,8 @@ export interface KnowledgeBase {
   max_documents: number;
   created_at: number;
   updated_at: number;
+  /** Retrieval cost level; servers without the column report "basic". */
+  retrieval_mode?: KnowledgeRetrievalMode;
 }
 
 export interface KnowledgeDocument {
@@ -231,6 +242,8 @@ export const knowledgeBasesApi = {
     graph_enabled?: boolean;
     graph_provider_id?: string;
     graph_model?: string;
+    pageindex_llm_provider_id?: string;
+    pageindex_llm_model?: string;
   }) =>
     request<KnowledgeCapability>("/knowledge-bases/feature", {
       method: "PUT",
@@ -330,6 +343,7 @@ export const knowledgeBasesApi = {
     icon_name?: string;
     icon_url?: string;
     max_documents?: number;
+    retrieval_mode?: KnowledgeRetrievalMode;
   }) =>
     request<KnowledgeBase>("/knowledge-bases", {
       method: "POST",
@@ -348,6 +362,7 @@ export const knowledgeBasesApi = {
       icon_name?: string;
       icon_url?: string;
       max_documents?: number;
+      retrieval_mode?: KnowledgeRetrievalMode;
     },
   ) =>
     request<KnowledgeBase>(`/knowledge-bases/${id}`, {

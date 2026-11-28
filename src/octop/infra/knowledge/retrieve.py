@@ -106,7 +106,16 @@ def _retrieve_context_sync(
     fetch_k = candidate_count(k) if rerank else k
 
     use_graph = graph_enabled(services)
+    selected_set = set(selected_ids)
+    any_advanced = any(
+        _kb_advanced(base) for base in visible_by_id.values() if base.id in selected_set
+    )
     tree_model: Any = None
+    if any_advanced:
+        try:
+            tree_model = build_pageindex_chat_model(services)
+        except Exception:
+            logger.warning("knowledge advanced retrieval model unavailable", exc_info=True)
     vector_entries: list[tuple[Any, Hit, Any]] = []
     lexicon_entries: list[tuple[Any, Hit, Any]] = []
     tree_entries: list[tuple[Any, Hit, Any]] = []
@@ -135,11 +144,10 @@ def _retrieve_context_sync(
         except Exception:
             logger.warning("knowledge lexicon search skipped for %s", kb_id, exc_info=True)
         try:
-            if tree_model is None:
-                tree_model = build_pageindex_chat_model(services)
             page_index = open_page_index(services, kb_id)
+            model = tree_model if _kb_advanced(base) else None
             for node in _search_tree(
-                page_index, (query or "").strip(), k=fetch_k, chat_model=tree_model
+                page_index, (query or "").strip(), k=fetch_k, chat_model=model
             ):
                 document = ready_documents.get(node.doc_id)
                 if document is not None:
@@ -147,7 +155,12 @@ def _retrieve_context_sync(
         except Exception:
             logger.warning("knowledge page-index search skipped for %s", kb_id, exc_info=True)
         if use_graph:
-            expansion = _expand(services, kb_id, query or "", chat_model=tree_model)
+            expansion = _expand(
+                services,
+                kb_id,
+                query or "",
+                chat_model=tree_model if _kb_advanced(base) else None,
+            )
             facts.extend(expansion.facts)
             chunk_texts: dict[str, dict[int, str]] = {}
             for doc_id, ref in expansion.chunks[:graph_quota]:
@@ -181,6 +194,11 @@ def _retrieve_context_sync(
     return _format_context(
         ranked[:k], char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS]
     )
+
+
+def _kb_advanced(base: Any) -> bool:
+    """Whether this knowledge base opts into the highest-cost retrieval modes."""
+    return str(getattr(base, "retrieval_mode", "") or "").strip().lower() == "advanced"
 
 
 def _graph_entry(

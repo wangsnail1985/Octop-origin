@@ -204,6 +204,7 @@ async def test_create_base_uses_selected_model_when_usable(
         "icon_name": "",
         "icon_url": "",
         "max_documents": 100,
+        "retrieval_mode": "basic",
     }
 
 

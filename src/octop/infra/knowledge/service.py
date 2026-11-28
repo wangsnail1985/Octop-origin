@@ -37,6 +37,7 @@ MAX_BASES_PER_OWNER = 20
 MAX_DOCUMENT_BYTES = upload_mb_to_bytes(DEFAULT_MAX_UPLOAD_MB)
 # Upper bound for the per-base max_documents field. Mirrors Field(le=10000).
 MAX_KB_MAX_DOCUMENTS = 10_000
+RETRIEVAL_MODES = ("basic", "advanced")
 _MAX_PREVIEW_CHARS = 200_000
 _EXT_TO_CONTENT_TYPE = {
     ".txt": "text/plain",
@@ -111,17 +112,19 @@ class KnowledgeService:
         icon_name: str = "",
         icon_url: str = "",
         max_documents: int = MAX_DOCS_PER_KB,
+        retrieval_mode: str = "basic",
     ) -> KnowledgeBaseRow:
         assert_knowledge_usable(
             self._services.settings_repo.get, getattr(self._services, "provider_repo", None)
         )
         if max_documents < 0 or max_documents > MAX_KB_MAX_DOCUMENTS:
             raise ValueError(f"max_documents must be between 0 and {MAX_KB_MAX_DOCUMENTS}")
+        mode = self._validated_retrieval_mode(retrieval_mode)
         owned = self._repo.count_bases_for_owner(owner_user_id)
         if owned >= MAX_BASES_PER_OWNER:
             raise ValueError(f"a user can own at most {MAX_BASES_PER_OWNER} knowledge bases")
         model = (self._services.settings_repo.get("knowledge_embedding_model") or "").strip()
-        return cast(
+        row = cast(
             KnowledgeBaseRow,
             self._repo.create_base(
                 owner_user_id=owner_user_id,
@@ -135,6 +138,17 @@ class KnowledgeService:
                 max_documents=max_documents,
             ),
         )
+        if mode != "basic":
+            self._repo.update_base(row.id, retrieval_mode=mode)
+            row = self._require_base(row.id)
+        return row
+
+    @staticmethod
+    def _validated_retrieval_mode(retrieval_mode: str) -> str:
+        mode = (retrieval_mode or "").strip().lower()
+        if mode not in RETRIEVAL_MODES:
+            raise ValueError(f"retrieval_mode must be one of {RETRIEVAL_MODES}")
+        return mode
 
     def list_visible_bases(
         self, *, actor_user_id: int, is_admin: bool = False
@@ -155,6 +169,7 @@ class KnowledgeService:
         icon_name: str | None = None,
         icon_url: str | None = None,
         max_documents: int | None = None,
+        retrieval_mode: str | None = None,
         is_admin: bool = False,
     ) -> KnowledgeBaseRow:
         self.require_owner(kb_id, actor_user_id=actor_user_id, is_admin=is_admin)
@@ -162,6 +177,7 @@ class KnowledgeService:
             max_documents < 0 or max_documents > MAX_KB_MAX_DOCUMENTS
         ):
             raise ValueError(f"max_documents must be between 0 and {MAX_KB_MAX_DOCUMENTS}")
+        mode = None if retrieval_mode is None else self._validated_retrieval_mode(retrieval_mode)
         self._repo.update_base(
             kb_id,
             name=name,
@@ -171,6 +187,7 @@ class KnowledgeService:
             icon_name=icon_name,
             icon_url=icon_url,
             max_documents=max_documents,
+            retrieval_mode=mode,
         )
         return self._require_base(kb_id)
 

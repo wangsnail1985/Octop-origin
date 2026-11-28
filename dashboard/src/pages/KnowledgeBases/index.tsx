@@ -79,6 +79,7 @@ import {
   knowledgeBasesApi,
   type KnowledgeBase,
   type KnowledgeCapability,
+  type KnowledgeRetrievalMode,
   type KnowledgeRerankOptions,
   type KnowledgeDocument,
   type KnowledgeGraphOptions,
@@ -165,6 +166,7 @@ type BaseFormValues = {
   icon_name?: string;
   icon_url?: string;
   max_documents?: number;
+  retrieval_mode?: KnowledgeRetrievalMode;
 };
 
 type DocsViewMode = "card" | "table";
@@ -379,6 +381,9 @@ export default function KnowledgeBasesPage() {
   const [graphProviders, setGraphProviders] = useState<
     KnowledgeGraphOptions["remote"]
   >([]);
+  const [pageindexLlmProviderId, setPageindexLlmProviderId] =
+    useState<string>();
+  const [pageindexLlmModel, setPageindexLlmModel] = useState<string>();
   const [graphOpen, setGraphOpen] = useState(false);
   const [ocrRemoteProviders, setOcrRemoteProviders] = useState<
     {
@@ -1197,6 +1202,7 @@ export default function KnowledgeBasesPage() {
       icon_name: "book-open",
       icon_url: "",
       max_documents: 100,
+      retrieval_mode: "basic",
     });
     setDefaultOpenChecked(false);
     setBaseVisibility("owner");
@@ -1213,6 +1219,7 @@ export default function KnowledgeBasesPage() {
       icon_name: base.icon_name || undefined,
       icon_url: base.icon_url || "",
       max_documents: base.max_documents,
+      retrieval_mode: base.retrieval_mode ?? "basic",
     });
     setDefaultOpenChecked(base.default_open);
     const rawVisibility = base.visibility ?? (base.shared ? "all" : "owner");
@@ -1413,6 +1420,9 @@ export default function KnowledgeBasesPage() {
     if (graphEnabledDraft && (!graphProviderId || !graphModel)) {
       return;
     }
+    if (pageindexLlmProviderId && !pageindexLlmModel) {
+      return;
+    }
     if (
       featureBackend === "onnx" &&
       !catalog.find((model) => model.id === featureModel)?.downloaded
@@ -1460,6 +1470,8 @@ export default function KnowledgeBasesPage() {
         graph_enabled: graphEnabledDraft,
         graph_provider_id: graphProviderId ?? "",
         graph_model: graphModel ?? "",
+        pageindex_llm_provider_id: pageindexLlmProviderId ?? "",
+        pageindex_llm_model: pageindexLlmModel ?? "",
       });
       setCapability(next);
       setFeatureModalOpen(false);
@@ -1492,6 +1504,10 @@ export default function KnowledgeBasesPage() {
     setGraphEnabledDraft(Boolean(capability?.graph?.enabled));
     setGraphProviderId(capability?.graph?.provider_id || undefined);
     setGraphModel(capability?.graph?.model || undefined);
+    setPageindexLlmProviderId(
+      capability?.pageindex_llm?.provider_id || undefined,
+    );
+    setPageindexLlmModel(capability?.pageindex_llm?.model || undefined);
     setFeatureModalOpen(true);
     void (async () => {
       const options = await loadEmbeddingOptions(false);
@@ -3925,6 +3941,24 @@ export default function KnowledgeBasesPage() {
               style={{ width: "100%" }}
             />
           </Form.Item>
+          <Form.Item
+            name="retrieval_mode"
+            label={t("knowledgeBases.retrievalMode")}
+            tooltip={t("knowledgeBases.retrievalModeHint")}
+          >
+            <Select
+              options={[
+                {
+                  value: "basic",
+                  label: t("knowledgeBases.retrievalModeBasic"),
+                },
+                {
+                  value: "advanced",
+                  label: t("knowledgeBases.retrievalModeAdvanced"),
+                },
+              ]}
+            />
+          </Form.Item>
           <div className={styles.formOptions}>
             <div className={styles.formOptionRow}>
               <div className={styles.formOptionCopy}>
@@ -3941,7 +3975,11 @@ export default function KnowledgeBasesPage() {
                 onChange={setDefaultOpenChecked}
               />
             </div>
-            <ResourceVisibilityGate allowOwner allowDepartment visibility={baseVisibility}>
+            <ResourceVisibilityGate
+              allowOwner
+              allowDepartment
+              visibility={baseVisibility}
+            >
               <div className={styles.formOptionRowVisibility}>
                 <div className={styles.formOptionCopy}>
                   <span className={styles.switchLabel}>
@@ -4444,6 +4482,66 @@ export default function KnowledgeBasesPage() {
                     />
                   </div>
                 ) : null}
+              </div>
+              <div className={styles.ocrSettings}>
+                <div className={styles.formOptions}>
+                  <div className={styles.formOptionRow}>
+                    <div className={styles.formOptionCopy}>
+                      <span className={styles.switchLabel}>
+                        {t("knowledgeBases.advancedRetrievalTitle")}
+                      </span>
+                      <span className={styles.formOptionHint}>
+                        {t("knowledgeBases.advancedRetrievalDescription")}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className={styles.featureFields}>
+                  <div className={styles.settingsFieldLabel}>
+                    {t("knowledgeBases.advancedRetrievalModelLabel")}
+                  </div>
+                  <Select
+                    value={pageindexLlmProviderId}
+                    onChange={(id) => {
+                      setPageindexLlmProviderId(id);
+                      setPageindexLlmModel(undefined);
+                    }}
+                    placeholder={t("knowledgeBases.selectProvider")}
+                    options={graphProviders.map((provider) => ({
+                      value: provider.provider_id,
+                      label: provider.provider_name,
+                    }))}
+                    notFoundContent={t("knowledgeBases.graphNoProviders")}
+                    allowClear
+                  />
+                  <div className={styles.onnxModelList}>
+                    {(
+                      graphProviders.find(
+                        (provider) =>
+                          provider.provider_id === pageindexLlmProviderId,
+                      )?.models ?? []
+                    ).map((model) => (
+                      <button
+                        key={model.id}
+                        type="button"
+                        className={cx(
+                          styles.onnxModelItem,
+                          pageindexLlmModel === model.id &&
+                            styles.onnxModelItemActive,
+                        )}
+                        aria-pressed={pageindexLlmModel === model.id}
+                        onClick={() => setPageindexLlmModel(model.id)}
+                      >
+                        <span className={styles.onnxModelName}>
+                          {model.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <span className={styles.formOptionHint}>
+                    {t("knowledgeBases.advancedRetrievalFallbackHint")}
+                  </span>
+                </div>
               </div>
             </div>
           </Spin>

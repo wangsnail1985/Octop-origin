@@ -37,6 +37,7 @@ class KnowledgeBaseRow:
     max_documents: int
     created_at: int
     updated_at: int
+    retrieval_mode: str = "basic"
 
     @classmethod
     def from_row(cls, r: DbRow) -> KnowledgeBaseRow:
@@ -45,6 +46,7 @@ class KnowledgeBaseRow:
         keys = frozenset(r.keys()) if hasattr(r, "keys") else frozenset()
         max_doc = int(r["max_documents"]) if "max_documents" in keys else 100
         icon_url = str(r["icon_url"] or "") if "icon_url" in keys else ""
+        mode = str(r["retrieval_mode"] or "basic") if "retrieval_mode" in keys else "basic"
         return cls(
             id=str(r["knowledge_base_id"]),
             pk=int(r["id"]),
@@ -61,6 +63,7 @@ class KnowledgeBaseRow:
             max_documents=max_doc,
             created_at=r["created_at"],
             updated_at=r["updated_at"],
+            retrieval_mode=mode if mode in {"basic", "advanced"} else "basic",
         )
 
 
@@ -227,6 +230,7 @@ class KnowledgeRepo:
         embedding_dim: int | None = None,
         doc_count: int | None = None,
         max_documents: int | None = None,
+        retrieval_mode: str | None = None,
     ) -> None:
         fields, params = partial_updates(
             [
@@ -240,6 +244,7 @@ class KnowledgeRepo:
                 ("embedding_dim", embedding_dim),
                 ("doc_count", doc_count),
                 ("max_documents", max_documents),
+                ("retrieval_mode", retrieval_mode),
             ]
         )
         if not fields:

@@ -55,6 +55,10 @@ from octop.infra.knowledge.ocr import (
     set_ocr_settings,
     validate_ocr_settings,
 )
+from octop.infra.knowledge.page_index import (
+    get_pageindex_llm_capability,
+    set_pageindex_llm_settings,
+)
 from octop.infra.knowledge.rerank import (
     get_rerank_capability,
     rerank_models,
@@ -116,6 +120,16 @@ class FeatureBody(BaseModel):
         default=None, description="Provider whose chat model extracts entities and relations."
     )
     graph_model: str | None = Field(default=None, description="Chat model ID used for extraction.")
+    pageindex_llm_provider_id: str | None = Field(
+        default=None,
+        description=(
+            "Provider of the small chat model used by advanced retrieval "
+            "(tree node picking, graph entity linking)."
+        ),
+    )
+    pageindex_llm_model: str | None = Field(
+        default=None, description="Small chat model ID for advanced retrieval."
+    )
 
 
 class GraphStats(BaseModel):
@@ -210,6 +224,15 @@ class CreateBaseBody(BaseModel):
         le=10_000,
         description="Per-base document limit. 0 = unlimited, default 100.",
     )
+    retrieval_mode: Literal["basic", "advanced"] = Field(
+        default="basic",
+        description=(
+            "Retrieval cost level: 'basic' runs vector + exact-term + keyword "
+            "tree search with zero query-time LLM; 'advanced' additionally uses "
+            "the configured small model for tree node picking and graph entity "
+            "linking."
+        ),
+    )
 
 
 class CreateFolderBody(BaseModel):
@@ -247,6 +270,10 @@ class UpdateBaseBody(BaseModel):
         ge=0,
         le=10_000,
         description="Per-base document limit. 0 = unlimited.",
+    )
+    retrieval_mode: Literal["basic", "advanced"] | None = Field(
+        default=None,
+        description="Retrieval cost level; see CreateBaseBody.retrieval_mode.",
     )
 
 
@@ -514,6 +541,9 @@ def _capability_payload(server: OctopServer) -> dict[str, Any]:
     payload["graph"] = get_graph_capability(
         server.services.settings_repo.get, server.services.provider_repo
     )
+    payload["pageindex_llm"] = get_pageindex_llm_capability(
+        server.services.settings_repo.get, server.services.provider_repo
+    )
     payload["limits"] = {
         "max_bases_per_owner": MAX_BASES_PER_OWNER,
         "max_docs_per_kb": MAX_DOCS_PER_KB,
@@ -686,6 +716,13 @@ async def put_feature(
                 model=body.graph_model,
                 provider_repo=server.services.provider_repo,
             )
+        if body.pageindex_llm_provider_id is not None or body.pageindex_llm_model is not None:
+            set_pageindex_llm_settings(
+                server.services.settings_repo.set,
+                provider_id=body.pageindex_llm_provider_id,
+                model=body.pageindex_llm_model,
+                provider_repo=server.services.provider_repo,
+            )
         set_feature_enabled(
             server.services.settings_repo.get,
             server.services.settings_repo.set,
@@ -831,6 +868,7 @@ async def create_base(
             icon_name=body.icon_name.strip(),
             icon_url=body.icon_url.strip(),
             max_documents=body.max_documents if body.max_documents is not None else MAX_DOCS_PER_KB,
+            retrieval_mode=body.retrieval_mode,
         )
         if visibility is not None and access is not None:
             access.set_visibility(
@@ -921,6 +959,7 @@ async def update_base(
             icon_name=body.icon_name.strip() if body.icon_name is not None else None,
             icon_url=body.icon_url.strip() if body.icon_url is not None else None,
             max_documents=body.max_documents,
+            retrieval_mode=body.retrieval_mode,
             is_admin=_is_admin(user),
         )
         if visibility is not None and access is not None:

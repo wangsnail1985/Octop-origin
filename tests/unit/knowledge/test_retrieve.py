@@ -298,3 +298,98 @@ def test_retrieve_context_survives_a_broken_lexicon_path(tmp_path, monkeypatch) 
     )
 
     assert "票据需要在三个工作日内提交" in context
+
+
+def _advanced_services(tmp_path, monkeypatch, *, mode: str):  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("OCTOP_HOME", str(tmp_path / "home"))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    services = SimpleNamespace(
+        knowledge_repo=KnowledgeRepo(pool),
+        settings_repo=SettingsRepo(pool),
+        user_repo=UserRepo(pool),
+    )
+    owner = services.user_repo.create(username="owner", password_hash="h", role="user")
+    base = services.knowledge_repo.create_base(owner_user_id=owner, name="Docs")
+    if mode != "basic":
+        services.knowledge_repo.update_base(base.id, retrieval_mode=mode)
+    document = services.knowledge_repo.create_document(
+        kb_id=base.id,
+        filename="policy.md",
+        content_type="text/markdown",
+        byte_size=1,
+        status="ready",
+    )
+    KnowledgeIndex(base.id).replace_doc_chunks(
+        document.id, ["票据需要在三个工作日内提交"], [[1.0, 0.0]], anchors=["§6.1 报销流程"]
+    )
+    monkeypatch.setattr(retrieve_module, "assert_knowledge_usable", lambda *_args: None)
+    monkeypatch.setattr(
+        retrieve_module, "embed_knowledge_texts", lambda _services, _texts: [[1.0, 0.0]]
+    )
+    return services, owner, base
+
+
+def test_advanced_mode_passes_the_llm_model_to_tree_and_graph(tmp_path, monkeypatch) -> None:
+    from octop.infra.knowledge.page_index import SqlitePageIndex
+    from octop.infra.knowledge.parse import Page
+    from octop.infra.knowledge.tree import build_nodes
+
+    services, owner, base = _advanced_services(tmp_path, monkeypatch, mode="advanced")
+    document = services.knowledge_repo.list_documents(base.id)[0]
+    SqlitePageIndex(base.id).replace_doc_nodes(
+        document.id,
+        build_nodes(
+            [Page(no=None, anchor="§6.1 报销流程", text="票据需要在三个工作日内提交")], document.id
+        ),
+    )
+    sentinel = object()
+    monkeypatch.setattr(retrieve_module, "build_pageindex_chat_model", lambda _services: sentinel)
+    seen: list[object] = []
+
+    def fake_search_llm(self: object, query: str, k: int, chat_model: object) -> None:
+        seen.append(chat_model)
+        return None
+
+    monkeypatch.setattr(SqlitePageIndex, "search_llm", fake_search_llm)
+
+    context = asyncio.run(
+        retrieve_module.retrieve_context(
+            services,
+            user_id=owner,
+            is_admin=False,
+            query="报销 流程 提交",
+            knowledge_base_ids=[base.id],
+        )
+    )
+
+    assert "票据需要在三个工作日内提交" in context
+    assert seen == [sentinel]
+
+
+def test_basic_mode_never_calls_the_llm_paths(tmp_path, monkeypatch) -> None:
+    from octop.infra.knowledge.page_index import SqlitePageIndex
+
+    services, owner, base = _advanced_services(tmp_path, monkeypatch, mode="basic")
+
+    def fail(_services: object) -> object:
+        raise AssertionError("basic mode must not build an LLM model")
+
+    monkeypatch.setattr(retrieve_module, "build_pageindex_chat_model", fail)
+
+    def fake_search_llm(self: object, query: str, k: int, chat_model: object) -> None:
+        raise AssertionError("basic mode must not call LLM tree search")
+
+    monkeypatch.setattr(SqlitePageIndex, "search_llm", fake_search_llm)
+
+    context = asyncio.run(
+        retrieve_module.retrieve_context(
+            services,
+            user_id=owner,
+            is_admin=False,
+            query="报销 流程 提交",
+            knowledge_base_ids=[base.id],
+        )
+    )
+
+    assert "票据需要在三个工作日内提交" in context

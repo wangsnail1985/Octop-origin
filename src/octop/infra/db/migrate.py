@@ -1858,6 +1858,13 @@ def _ensure_knowledge_base_icon_url_schema(db: DatabasePool) -> None:
     _ensure_column(db, "knowledge_bases", "icon_url", "TEXT NOT NULL DEFAULT ''")
 
 
+def _ensure_knowledge_retrieval_mode_schema(db: DatabasePool) -> None:
+    """Retrieval cost level per knowledge base. Idempotent."""
+    if not _table_exists(db, "knowledge_bases"):
+        return
+    _ensure_column(db, "knowledge_bases", "retrieval_mode", "TEXT NOT NULL DEFAULT 'basic'")
+
+
 def _ensure_bridge_icon_url_schema(db: DatabasePool) -> None:
     """Optional portrait URL on bridge connections. Idempotent."""
     if not _table_exists(db, "bridge_connections"):
@@ -2267,6 +2274,11 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
         return
     if version == 26:
         _ensure_user_group_profile_schema(db)
+        with db.connect() as conn:
+            conn.execute("UPDATE _schema_version SET version = ?", (version,))
+        return
+    if version == 27:
+        _ensure_knowledge_retrieval_mode_schema(db)
         with db.connect() as conn:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return
