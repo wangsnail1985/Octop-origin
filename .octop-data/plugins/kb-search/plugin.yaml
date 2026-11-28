@@ -1,0 +1,10 @@
+id: kb-search
+version: 0.1.0
+name: 企业知识库检索
+description: 调用 kb-service 双引擎知识库（语义向量 + PageIndex 页码级检索），按账户权限过滤，返回带页码/锚点溯源的知识片段
+icon: icon.svg
+group: tools
+kind: tool
+entry: main.py
+requires:
+  - httpx>=0.27

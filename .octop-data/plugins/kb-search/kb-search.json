@@ -1,0 +1,21 @@
+{
+  "base_url": "http://127.0.0.1:8125",
+  "request_timeout_seconds": 30,
+  "default_top_k": 8,
+  "max_content_chars": 800,
+  "default_account": {
+    "username": "svc-octop",
+    "password": "KbSvc-2026-Octop!"
+  },
+  "users": {},
+  "roles": {
+    "学校教务处": {
+      "username": "octop-jwc",
+      "password": "OctopJwc-2026!"
+    },
+    "教务处": {
+      "username": "octop-jwc",
+      "password": "OctopJwc-2026!"
+    }
+  }
+}
