@@ -152,6 +152,29 @@ class KnowledgeIndex:
         with self._connect() as conn:
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
 
+    def lexicon_search(self, query: str, k: int) -> list[Hit]:
+        """Exact-term path: LIKE pre-filter on text/anchor, coverage scoring."""
+        from octop.infra.knowledge.lexicon import like_patterns, rank_rows, terms
+
+        term_list = terms(query)
+        if k <= 0 or not term_list:
+            return []
+        patterns = like_patterns(term_list)
+        clause = " OR ".join(
+            "text LIKE ? ESCAPE '\\' OR anchor LIKE ? ESCAPE '\\'" for _ in patterns
+        )
+        params: list[str] = [pattern for pattern in patterns for _ in (0, 1)]
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT chunk_id, doc_id, ordinal, text, page, anchor FROM chunks WHERE {clause}",
+                params,
+            ).fetchall()
+        return rank_rows(
+            [(str(row[0]), str(row[1]), int(row[2]), str(row[3]), row[4], row[5]) for row in rows],
+            term_list,
+            k=k,
+        )
+
     def search(self, query_vec: Sequence[float], k: int) -> list[Hit]:
         """Return the ``k`` best chunk hits using in-process cosine similarity."""
         if k <= 0:

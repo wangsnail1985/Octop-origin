@@ -10,6 +10,7 @@ from typing import Any
 from octop.i18n import tr
 from octop.infra.knowledge.citations import append_citations_marker, citations_from_ranked
 from octop.infra.knowledge.embed import embed_knowledge_texts
+from octop.infra.knowledge.fuse import dedupe_key, rrf_fuse
 from octop.infra.knowledge.gate import assert_knowledge_usable
 from octop.infra.knowledge.graph import (
     MAX_FACTS,
@@ -100,7 +101,8 @@ def _retrieve_context_sync(
     fetch_k = candidate_count(k) if rerank else k
 
     use_graph = graph_enabled(services)
-    ranked: list[tuple[Any, Hit, Any]] = []
+    vector_entries: list[tuple[Any, Hit, Any]] = []
+    lexicon_entries: list[tuple[Any, Hit, Any]] = []
     facts: list[str] = []
     related: list[tuple[Any, Any, int]] = []
     for kb_id in selected_ids:
@@ -112,10 +114,18 @@ def _retrieve_context_sync(
             for document in services.knowledge_repo.list_documents(kb_id)
             if document.status == "ready" and not document.is_dir
         }
-        for hit in open_knowledge_index(services, kb_id).search(query_vectors[0], k=fetch_k):
+        index = open_knowledge_index(services, kb_id)
+        for hit in index.search(query_vectors[0], k=fetch_k):
             document = ready_documents.get(hit.doc_id)
             if document is not None:
-                ranked.append((base, hit, document))
+                vector_entries.append((base, hit, document))
+        try:
+            for hit in index.lexicon_search(query or "", k=fetch_k):
+                document = ready_documents.get(hit.doc_id)
+                if document is not None:
+                    lexicon_entries.append((base, hit, document))
+        except Exception:
+            logger.warning("knowledge lexicon search skipped for %s", kb_id, exc_info=True)
         if use_graph:
             expansion = _expand(services, kb_id, query or "")
             facts.extend(expansion.facts)
@@ -125,11 +135,33 @@ def _retrieve_context_sync(
                 if doc_id in ready_documents
             )
 
-    ranked.sort(key=lambda item: item[1].score, reverse=True)
+    ranked = _fuse_entries(vector_entries, lexicon_entries)
     if rerank:
         ranked = _rerank(services, (query or "").strip(), ranked[:fetch_k])
     top = _with_graph_passages(services, ranked[:k], related, k=k)
     return _format_context(top, char_budget=char_budget, locale=locale, facts=facts[:MAX_FACTS])
+
+
+def _fuse_entries(
+    vector_entries: Sequence[tuple[Any, Hit, Any]],
+    lexicon_entries: Sequence[tuple[Any, Hit, Any]],
+) -> list[tuple[Any, Hit, Any]]:
+    """Fuse the vector and exact-term paths with reciprocal-rank fusion.
+
+    Entries sharing one ``(doc, anchor)`` key keep a single vote at their best
+    rank, so a section fragmented into many windows cannot outvote a strong hit.
+    """
+    registry: dict[tuple[str, str], tuple[Any, Hit, Any]] = {}
+
+    def hits_of(entries: Sequence[tuple[Any, Hit, Any]]) -> list[Hit]:
+        hits: list[Hit] = []
+        for base, hit, document in entries:
+            registry.setdefault(dedupe_key(hit), (base, hit, document))
+            hits.append(hit)
+        return hits
+
+    fused = rrf_fuse({"vector": hits_of(vector_entries), "lexicon": hits_of(lexicon_entries)})
+    return [(registry[dedupe_key(hit)][0], hit, registry[dedupe_key(hit)][2]) for hit in fused]
 
 
 def _expand(services: Any, kb_id: str, query: str) -> GraphExpansion:

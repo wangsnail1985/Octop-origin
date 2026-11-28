@@ -192,6 +192,30 @@ class PgVectorKnowledgeIndex:
             )
             conn.commit()
 
+    def lexicon_search(self, query: str, k: int) -> list[Hit]:
+        """Exact-term path: ILIKE pre-filter on text/anchor, coverage scoring."""
+        from octop.infra.knowledge.lexicon import like_patterns, rank_rows, terms
+
+        term_list = terms(query)
+        if k <= 0 or not term_list:
+            return []
+        patterns = like_patterns(term_list)
+        clause = " OR ".join(
+            "text ILIKE %s ESCAPE '\\' OR anchor ILIKE %s ESCAPE '\\'" for _ in patterns
+        )
+        params: list[str] = [pattern for pattern in patterns for _ in (0, 1)]
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT chunk_id, doc_id, ordinal, text, page, anchor FROM {_TABLE} "
+                f"WHERE kb_id = %s AND ({clause})",
+                (self._kb_id, *params),
+            ).fetchall()
+        return rank_rows(
+            [(str(row[0]), str(row[1]), int(row[2]), str(row[3]), row[4], row[5]) for row in rows],
+            term_list,
+            k=k,
+        )
+
     def delete_kb(self) -> None:
         with self._connect() as conn:
             conn.execute(

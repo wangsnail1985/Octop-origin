@@ -225,3 +225,74 @@ def test_retrieve_context_survives_a_broken_graph(tmp_path, monkeypatch) -> None
 
     assert "Apollo team" in context
     assert "is funded by" not in context
+
+
+def _lexicon_services(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("OCTOP_HOME", str(tmp_path / "home"))
+    pool = SqlitePool(tmp_path / "octop.db")
+    run_migrations(pool)
+    services = SimpleNamespace(
+        knowledge_repo=KnowledgeRepo(pool),
+        settings_repo=SettingsRepo(pool),
+        user_repo=UserRepo(pool),
+    )
+    owner = services.user_repo.create(username="owner", password_hash="h", role="user")
+    base = services.knowledge_repo.create_base(owner_user_id=owner, name="Docs")
+    document = services.knowledge_repo.create_document(
+        kb_id=base.id,
+        filename="policy.md",
+        content_type="text/markdown",
+        byte_size=1,
+        status="ready",
+    )
+    # The anchored section is orthogonal to the query vector: only the exact-term
+    # path can reach it.
+    KnowledgeIndex(base.id).replace_doc_chunks(
+        document.id,
+        ["票据需要在三个工作日内提交给财务部门"],
+        [[0.0, 1.0]],
+        anchors=["§6.1 报销流程"],
+    )
+    monkeypatch.setattr(retrieve_module, "assert_knowledge_usable", lambda *_args: None)
+    monkeypatch.setattr(
+        retrieve_module, "embed_knowledge_texts", lambda _services, _texts: [[1.0, 0.0]]
+    )
+    return services, owner, base
+
+
+def test_retrieve_context_lexicon_path_reaches_orthogonal_passage(tmp_path, monkeypatch) -> None:
+    services, owner, base = _lexicon_services(tmp_path, monkeypatch)
+
+    context = asyncio.run(
+        retrieve_module.retrieve_context(
+            services,
+            user_id=owner,
+            is_admin=False,
+            query="报销 流程 怎么 提交",
+            knowledge_base_ids=[base.id],
+        )
+    )
+
+    assert "票据需要在三个工作日内提交" in context
+    assert "§6.1 报销流程" in context
+
+
+def test_retrieve_context_survives_a_broken_lexicon_path(tmp_path, monkeypatch) -> None:
+    services, owner, base = _lexicon_services(tmp_path, monkeypatch)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("lexicon storage is unavailable")
+
+    monkeypatch.setattr(KnowledgeIndex, "lexicon_search", boom)
+
+    context = asyncio.run(
+        retrieve_module.retrieve_context(
+            services,
+            user_id=owner,
+            is_admin=False,
+            query="票据 提交 期限",
+            knowledge_base_ids=[base.id],
+        )
+    )
+
+    assert "票据需要在三个工作日内提交" in context
