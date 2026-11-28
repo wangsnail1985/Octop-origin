@@ -12,7 +12,7 @@ from octop.infra.knowledge.chunk import chunk_pages
 from octop.infra.knowledge.embed import embed_knowledge_texts
 from octop.infra.knowledge.gate import assert_knowledge_usable
 from octop.infra.knowledge.graph import enqueue_document_graph, mark_document_reindexed
-from octop.infra.knowledge.ocr import optional_ocr_extractor
+from octop.infra.knowledge.ocr import optional_ocr_page_extractor
 from octop.infra.knowledge.params import get_advanced_settings
 from octop.infra.knowledge.parse import parse_document_pages
 from octop.infra.knowledge.plane import open_knowledge_index, open_page_index
@@ -53,7 +53,7 @@ def process_document(services: Any, kb_id: str, doc_id: str) -> None:
     try:
         path = KnowledgeBlobs.from_services(services).ensure_local(kb_id, doc_id, document.filename)
         pages = parse_document_pages(
-            path, ocr=optional_ocr_extractor(services), title=Path(document.filename).stem
+            path, ocr=optional_ocr_page_extractor(services), title=Path(document.filename).stem
         )
         knobs = get_advanced_settings(services.settings_repo.get)
         chunks = chunk_pages(pages, size=knobs["chunk_size"], overlap=knobs["chunk_overlap"])

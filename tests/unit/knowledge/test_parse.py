@@ -459,8 +459,61 @@ def test_pages_image_ocr_yields_single_anchored_unit(tmp_path: Path) -> None:
     path = tmp_path / "scan.png"
     path.write_bytes(b"png-bytes")
 
-    pages = parse_document_pages(path, ocr=lambda _p: "recognized text")
+    pages = parse_document_pages(path, ocr=lambda _p: [(None, "recognized text")])
 
     assert [(page.no, page.anchor, page.text) for page in pages] == [
         (None, "¶1", "recognized text")
     ]
+
+
+def test_pages_scanned_pdf_ocr_keeps_page_numbers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(b"%PDF-fake")
+
+    class _FakePage:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class _FakeReader:
+        def __init__(self, _path: object) -> None:
+            self.pages = [_FakePage(""), _FakePage("   ")]
+
+    monkeypatch.setattr("pypdf.PdfReader", _FakeReader)
+
+    def fake_ocr(_path: object) -> list[tuple[int | None, str]]:
+        return [(1, "第一页 发票抬头"), (2, ""), (3, "第二页 费用明细")]
+
+    pages = parse_document_pages(path, ocr=fake_ocr)
+
+    assert [(page.no, page.anchor, page.text) for page in pages] == [
+        (1, None, "第一页 发票抬头"),
+        (3, None, "第二页 费用明细"),
+    ]
+
+
+def test_pages_text_pdf_never_calls_ocr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "text.pdf"
+    path.write_bytes(b"%PDF-fake")
+
+    class _FakePage:
+        @staticmethod
+        def extract_text() -> str:
+            return "embedded text"
+
+    class _FakeReader:
+        def __init__(self, _path: object) -> None:
+            self.pages = [_FakePage()]
+
+    monkeypatch.setattr("pypdf.PdfReader", _FakeReader)
+
+    def unexpected_ocr(_path: object) -> list[tuple[int | None, str]]:
+        raise AssertionError("OCR must not run for a text-layer PDF")
+
+    pages = parse_document_pages(path, ocr=unexpected_ocr)
+
+    assert [(page.no, page.text) for page in pages] == [(1, "embedded text")]

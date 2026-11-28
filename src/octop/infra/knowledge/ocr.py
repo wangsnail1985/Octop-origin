@@ -11,7 +11,7 @@ import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from langchain_core.messages import HumanMessage
 
@@ -23,6 +23,16 @@ from octop.infra.utils.runtime_packages import PackageInstallSpec, install_packa
 logger = logging.getLogger(__name__)
 
 OCR_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+# One OCR unit: ``(page_number, text)``. ``None`` marks a non-paginated image.
+OcrPageText = tuple[int | None, str]
+
+
+class OcrPagesExtractor(Protocol):
+    """OCR a file into per-page ``(page_number, text)`` units, in page order."""
+
+    def __call__(self, path: Path) -> list[OcrPageText]: ...
+
 
 _ENABLED_KEY = "knowledge_ocr_enabled"
 _BACKEND_KEY = "knowledge_ocr_backend"
@@ -278,14 +288,41 @@ def optional_ocr_extractor(services: Any) -> OcrExtractor | None:
     return extract
 
 
-def _image_inputs(path: Path) -> Iterator[tuple[bytes, str]]:
+def optional_ocr_page_extractor(services: Any) -> OcrPagesExtractor | None:
+    """Per-page OCR for indexing: scanned PDFs keep their page numbers.
+
+    ``None`` when OCR is disabled; the caller indexes without OCR instead.
+    """
+    if not load_ocr_config(services.settings_repo.get).enabled:
+        return None
+
+    def extract(path: Path) -> list[OcrPageText]:
+        config = load_ocr_config(services.settings_repo.get)
+        if config.backend == "onnx":
+            if not local_ocr_deps_available():
+                raise RuntimeError("knowledge local OCR prerequisites are not satisfied")
+            return _extract_pages_local(path)
+        provider = _provider_for_config(services.provider_repo, config)
+        if not _remote_ready(provider, config.model):
+            raise RuntimeError("knowledge remote OCR provider is not ready")
+        return _RemoteOcr(provider, config.model).extract_pages(path)
+
+    return extract
+
+
+def _image_inputs(path: Path) -> Iterator[tuple[int | None, bytes, str]]:
+    """Yield ``(page_number, image_bytes, media_type)`` in reading order.
+
+    PDFs rasterize one entry per page (1-based numbers); other supported files
+    are single images whose number is ``None``.
+    """
     if path.suffix.lower() != ".pdf":
         media_type = {
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
             ".webp": "image/webp",
         }.get(path.suffix.lower(), "image/png")
-        yield path.read_bytes(), media_type
+        yield None, path.read_bytes(), media_type
         return
 
     import pymupdf
@@ -293,8 +330,9 @@ def _image_inputs(path: Path) -> Iterator[tuple[bytes, str]]:
     pymupdf_api: Any = pymupdf
     document = pymupdf_api.open(path)
     try:
-        for page in document:
+        for page_no, page in enumerate(document, start=1):
             yield (
+                page_no,
                 page.get_pixmap(matrix=pymupdf_api.Matrix(2, 2), alpha=False).tobytes("png"),
                 "image/png",
             )
@@ -312,49 +350,70 @@ def _rapidocr_engine() -> Any:
         return _local_engine
 
 
-def _extract_local(path: Path) -> str:
+def _engine_page_text(engine: Any, data: bytes) -> str:
+    with _local_engine_lock:
+        result = engine(data)
+    text = getattr(result, "txts", None)
+    if isinstance(text, (list, tuple)):
+        return "\n".join(str(line) for line in text if str(line).strip())
+    return str(text or "").strip()
+
+
+def _extract_pages_local(path: Path) -> list[OcrPageText]:
     engine = _rapidocr_engine()
-    parts: list[str] = []
-    for data, _media_type in _image_inputs(path):
-        with _local_engine_lock:
-            result = engine(data)
-        text = getattr(result, "txts", None)
-        if isinstance(text, (list, tuple)):
-            page_text = "\n".join(str(line) for line in text if str(line).strip())
-        else:
-            page_text = str(text or "").strip()
+    pages: list[OcrPageText] = []
+    for page_no, data, _media_type in _image_inputs(path):
+        page_text = _engine_page_text(engine, data)
         if page_text:
-            parts.append(page_text)
-    return "\n\n".join(parts)
+            pages.append((page_no, page_text))
+    return pages
+
+
+def _extract_local(path: Path) -> str:
+    return "\n\n".join(text for _page_no, text in _extract_pages_local(path))
 
 
 class _RemoteOcr:
+    """Vision-model OCR over provider chat models (Qwen VL / qwen-vl-ocr, GPT-4o, ...)."""
+
     def __init__(self, provider: Any, model_id: str) -> None:
         self._model = build_probe_chat_model(provider, model_id=model_id)
+        # OCR-specialized models (DashScope qwen-vl-ocr, ...) accept image-only
+        # messages: a custom transcription prompt is unsupported and can error.
+        self._image_only = "ocr" in model_id.lower()
+
+    def _page_text(self, path_name: str, data: bytes, media_type: str) -> str:
+        encoded = base64.b64encode(data).decode("ascii")
+        content: list[dict[str, Any]] = []
+        if not self._image_only:
+            content.append({"type": "text", "text": _OCR_PROMPT})
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+            }
+        )
+        message_content = cast("list[str | dict[Any, Any]]", content)
+        text = llm_text_content(self._model.invoke([HumanMessage(content=message_content)]))
+        if not text:
+            return ""
+        if _is_no_image_refusal(text):
+            # Indexing a refusal would mark the document ready with junk chunks; an empty
+            # result instead fails the document with "no extractable text".
+            logger.warning(
+                "remote OCR returned a no-image refusal for %s; treating the page as empty",
+                path_name,
+            )
+            return ""
+        return text
+
+    def extract_pages(self, path: Path) -> list[OcrPageText]:
+        pages: list[OcrPageText] = []
+        for page_no, data, media_type in _image_inputs(path):
+            text = self._page_text(path.name, data, media_type)
+            if text.strip():
+                pages.append((page_no, text))
+        return pages
 
     def __call__(self, path: Path) -> str:
-        parts: list[str] = []
-        for data, media_type in _image_inputs(path):
-            encoded = base64.b64encode(data).decode("ascii")
-            message = HumanMessage(
-                content=[
-                    {"type": "text", "text": _OCR_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{media_type};base64,{encoded}"},
-                    },
-                ]
-            )
-            text = llm_text_content(self._model.invoke([message]))
-            if not text:
-                continue
-            if _is_no_image_refusal(text):
-                # Indexing a refusal would mark the document ready with junk chunks; an empty
-                # result instead fails the document with "no extractable text".
-                logger.warning(
-                    "remote OCR returned a no-image refusal for %s; treating the page as empty",
-                    path.name,
-                )
-                continue
-            parts.append(text)
-        return "\n\n".join(parts)
+        return "\n\n".join(text for _page_no, text in self.extract_pages(path))

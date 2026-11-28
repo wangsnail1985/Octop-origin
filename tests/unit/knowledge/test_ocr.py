@@ -198,13 +198,19 @@ def test_remote_ocr_sends_image_block(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def _remote_extractor(monkeypatch: pytest.MonkeyPatch, reply: object) -> ocr._RemoteOcr:
-    """Build a ``_RemoteOcr`` whose model returns *reply* (str or a per-call sequence)."""
+    """Build a ``_RemoteOcr`` whose model returns *reply* (str or a per-call cycle)."""
+
+    replies = list(reply) if isinstance(reply, list) else None
 
     class Model:
+        calls = 0
+
         @staticmethod
         def invoke(_value: list[object]) -> SimpleNamespace:
-            if isinstance(reply, list):
-                return SimpleNamespace(content=reply.pop(0))
+            if replies is not None:
+                text = replies[Model.calls % len(replies)]
+                Model.calls += 1
+                return SimpleNamespace(content=text)
             return SimpleNamespace(content=reply)
 
     monkeypatch.setattr(ocr, "build_probe_chat_model", lambda *_a, **_k: Model())
@@ -253,7 +259,12 @@ def test_remote_ocr_skips_refusal_page_but_keeps_transcribed_page(
     monkeypatch.setattr(
         ocr,
         "_image_inputs",
-        lambda _path: iter([(b"page-1", "image/png"), (b"page-2", "image/png")]),
+        lambda _path: iter(
+            [
+                (1, b"page-1", "image/png"),
+                (2, b"page-2", "image/png"),
+            ]
+        ),
     )
 
     extractor = _remote_extractor(
@@ -262,3 +273,98 @@ def test_remote_ocr_skips_refusal_page_but_keeps_transcribed_page(
     )
 
     assert extractor(pdf) == "第二页正文"
+    assert extractor.extract_pages(pdf) == [(2, "第二页正文")]
+
+
+def test_remote_ocr_pages_keep_page_numbers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scanned PDFs OCR page by page so citations can point at 第N页."""
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(
+        ocr,
+        "_image_inputs",
+        lambda _path: iter(
+            [
+                (1, b"page-1", "image/png"),
+                (2, b"page-2", "image/png"),
+                (3, b"page-3", "image/png"),
+            ]
+        ),
+    )
+
+    extractor = _remote_extractor(monkeypatch, ["第一页正文", "", "第三页正文"])
+
+    assert extractor.extract_pages(pdf) == [(1, "第一页正文"), (3, "第三页正文")]
+
+
+def test_qwen_ocr_specialized_model_gets_image_only_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qwen-vl-ocr and friends do not take a transcription prompt: send image only."""
+    image = tmp_path / "scan.png"
+    image.write_bytes(b"image")
+    messages: list[object] = []
+
+    class Model:
+        @staticmethod
+        def invoke(value: list[object]) -> SimpleNamespace:
+            messages.extend(value)
+            return SimpleNamespace(content="发票抬头：青松科技有限公司")
+
+    monkeypatch.setattr(ocr, "build_probe_chat_model", lambda *_a, **_k: Model())
+
+    assert ocr._RemoteOcr(SimpleNamespace(), "qwen-vl-ocr")(image) == "发票抬头：青松科技有限公司"
+
+    content = messages[0].content
+    assert [part["type"] for part in content] == ["image_url"]
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_generic_vision_model_gets_transcription_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "scan.png"
+    image.write_bytes(b"image")
+    messages: list[object] = []
+
+    class Model:
+        @staticmethod
+        def invoke(value: list[object]) -> SimpleNamespace:
+            messages.extend(value)
+            return SimpleNamespace(content="text")
+
+    monkeypatch.setattr(ocr, "build_probe_chat_model", lambda *_a, **_k: Model())
+
+    assert ocr._RemoteOcr(SimpleNamespace(), "qwen-vl-max")(image) == "text"
+
+    content = messages[0].content
+    assert [part["type"] for part in content] == ["text", "image_url"]
+
+
+def test_local_ocr_pages_keep_page_numbers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    def engine(_data: bytes) -> SimpleNamespace:
+        return SimpleNamespace(txts=("本地识别文本",))
+
+    monkeypatch.setattr(ocr, "_rapidocr_engine", lambda: engine)
+    monkeypatch.setattr(
+        ocr,
+        "_image_inputs",
+        lambda _path: iter([(1, b"p1", "image/png"), (2, b"p2", "image/png")]),
+    )
+
+    assert ocr._extract_pages_local(pdf) == [(1, "本地识别文本"), (2, "本地识别文本")]
+    assert ocr._extract_local(pdf) == "本地识别文本\n\n本地识别文本"
+
+
+def test_is_vision_model_recognizes_ocr_named_models() -> None:
+    from octop.infra.agents.providers.model_flags import is_vision_model
+
+    assert is_vision_model({"id": "qwen-vl-ocr-latest"})
+    assert is_vision_model({"id": "qwen3-ocr"})
+    assert is_vision_model({"id": "qwen-vl-max"})
+    assert not is_vision_model({"id": "qwen-turbo"})

@@ -22,7 +22,9 @@ from typing import TYPE_CHECKING, Any
 from octop.infra.knowledge.ocr import OCR_IMAGE_SUFFIXES
 
 if TYPE_CHECKING:
-    from octop.infra.knowledge.ocr import OcrExtractor
+    from collections.abc import Callable
+
+    from octop.infra.knowledge.ocr import OcrExtractor, OcrPageText
 
 _PLAIN_TEXT_SUFFIXES = {
     ".md",
@@ -95,15 +97,19 @@ def _paragraph_pages(text: str, *, first_no: int = 1) -> list[Page]:
 # -- pages-per-format ---------------------------------------------------------
 
 
-def _pdf_pages(path: Path, *, ocr: OcrExtractor | None) -> list[Page]:
+def _pdf_pages(path: Path, *, ocr: Callable[[Path], list[OcrPageText]] | None) -> list[Page]:
     from pypdf import PdfReader
 
     pages = [
         Page(no=number, anchor=None, text=page.extract_text() or "")
         for number, page in enumerate(PdfReader(path).pages, start=1)
     ]
+    # A PDF with no text layer at all is a scan: OCR page by page so each unit
+    # keeps its page number and citations can say 第N页 / p.N.
     if not any(unit.text.strip() for unit in pages) and ocr is not None:
-        return [Page(no=None, anchor=None, text=ocr(path))]
+        return [
+            Page(no=page_no, anchor=None, text=text) for page_no, text in ocr(path) if text.strip()
+        ]
     return [unit for unit in pages if unit.text.strip()]
 
 
@@ -315,10 +321,16 @@ def _xlsx_row_rows(sheet: Any) -> list[tuple[int, list[object]]]:
 
 
 def parse_document_pages(
-    path: Path, *, ocr: OcrExtractor | None = None, title: str | None = None
+    path: Path,
+    *,
+    ocr: Callable[[Path], list[OcrPageText]] | None = None,
+    title: str | None = None,
 ) -> list[Page]:
     """Extract anchor-bearing page units from a supported local document.
 
+    *ocr* is a per-page OCR callback returning ``(page_number, text)`` units
+    (see :func:`octop.infra.knowledge.ocr.optional_ocr_page_extractor`); it is
+    consulted for images and for PDFs whose pages have no text layer (scans).
     *title* overrides the file stem in sheet anchors (csv/tsv), so a document
     stored under its internal id can still cite the uploaded filename.
     """
@@ -326,7 +338,8 @@ def parse_document_pages(
     if suffix in OCR_IMAGE_SUFFIXES:
         if ocr is None:
             raise RuntimeError("knowledge OCR is not enabled")
-        return [Page(no=None, anchor="¶1", text=ocr(path))]
+        text = "\n\n".join(unit_text for _page_no, unit_text in ocr(path) if unit_text.strip())
+        return [Page(no=None, anchor="¶1", text=text)] if text.strip() else []
     if suffix in _PLAIN_TEXT_SUFFIXES:
         text = _read_text(path)
         if suffix in {".md", ".markdown"}:

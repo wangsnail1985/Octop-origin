@@ -152,6 +152,7 @@ def is_vision_model(model: dict[str, Any]) -> bool:
             "-vl",
             "vision",
             "-image",
+            "ocr",
             "gpt-4o",
             "gpt-4.1",
             "claude-3",
