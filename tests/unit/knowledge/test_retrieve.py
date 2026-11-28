@@ -18,7 +18,22 @@ from octop.infra.knowledge.graph_store import (
     ChunkRelation,
     SqliteKnowledgeGraphStore,
 )
-from octop.infra.knowledge.index import KnowledgeIndex
+from octop.infra.knowledge.index import Hit, KnowledgeIndex
+
+
+def test_citation_text_prefers_page_then_anchor_then_chunk_order() -> None:
+    base = SimpleNamespace(name="KB")
+    document = SimpleNamespace(filename="a.md")
+    with_page = Hit("c1", "a", 0, "t", 1.0, {}, page=12)
+    with_anchor = Hit("c2", "a", 1, "t", 1.0, {}, anchor="§2.1 报销流程")
+    legacy = Hit("c3", "a", 2, "t", 1.0, {})
+
+    assert "第12页" in retrieve_module._citation_text(base, with_page, document, locale="zh")
+    assert "§2.1 报销流程" in retrieve_module._citation_text(
+        base, with_anchor, document, locale="zh"
+    )
+    assert "第3段" in retrieve_module._citation_text(base, legacy, document, locale="zh")
+    assert "p.12" in retrieve_module._citation_text(base, with_page, document, locale="en")
 
 
 def test_retrieve_context_filters_unreadable_knowledge_base(tmp_path, monkeypatch) -> None:
@@ -91,8 +106,8 @@ def test_format_context_cites_only_documents_inside_the_budget() -> None:
     base = SimpleNamespace(id="kb", name="KB")
     doc_a = SimpleNamespace(id="a", filename="a.md", path="a.md")
     doc_b = SimpleNamespace(id="b", filename="b.md", path="b.md")
-    hit_a = SimpleNamespace(text="alpha " * 40, ordinal=0)
-    hit_b = SimpleNamespace(text="beta " * 40, ordinal=0)
+    hit_a = SimpleNamespace(text="alpha " * 40, ordinal=0, page=None, anchor=None)
+    hit_b = SimpleNamespace(text="beta " * 40, ordinal=0, page=None, anchor=None)
 
     text = retrieve_module._format_context(
         [(base, hit_a, doc_a), (base, hit_b, doc_b)],

@@ -11,7 +11,12 @@ CITATIONS_MARKER_PREFIX = "<!--octop-kb-citations:"
 CITATIONS_MARKER_SUFFIX = "-->"
 
 
-class KnowledgeCitation(TypedDict):
+class _OptionalCitationFields(TypedDict, total=False):
+    page: int
+    anchor: str
+
+
+class KnowledgeCitation(_OptionalCitationFields):
     kb_id: str
     kb_name: str
     doc_id: str
@@ -28,15 +33,20 @@ def citations_from_ranked(ranked: Sequence[tuple[Any, Any, Any]]) -> list[Knowle
         if not doc_id or doc_id in seen:
             continue
         seen.add(doc_id)
-        out.append(
-            {
-                "kb_id": str(getattr(base, "id", "") or ""),
-                "kb_name": str(getattr(base, "name", "") or ""),
-                "doc_id": doc_id,
-                "filename": str(getattr(document, "filename", "") or doc_id),
-                "path": str(getattr(document, "path", "") or ""),
-            }
-        )
+        citation: KnowledgeCitation = {
+            "kb_id": str(getattr(base, "id", "") or ""),
+            "kb_name": str(getattr(base, "name", "") or ""),
+            "doc_id": doc_id,
+            "filename": str(getattr(document, "filename", "") or doc_id),
+            "path": str(getattr(document, "path", "") or ""),
+        }
+        page = getattr(_hit, "page", None)
+        anchor = getattr(_hit, "anchor", None)
+        if isinstance(page, int):
+            citation["page"] = page
+        if anchor:
+            citation["anchor"] = str(anchor)
+        out.append(citation)
     return out
 
 

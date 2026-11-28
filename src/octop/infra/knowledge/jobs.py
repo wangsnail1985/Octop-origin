@@ -7,13 +7,13 @@ import logging
 from typing import Any
 
 from octop.infra.knowledge.blobs import KnowledgeBlobs
-from octop.infra.knowledge.chunk import chunk_text
+from octop.infra.knowledge.chunk import chunk_pages
 from octop.infra.knowledge.embed import embed_knowledge_texts
 from octop.infra.knowledge.gate import assert_knowledge_usable
 from octop.infra.knowledge.graph import enqueue_document_graph, mark_document_reindexed
 from octop.infra.knowledge.ocr import optional_ocr_extractor
 from octop.infra.knowledge.params import get_advanced_settings
-from octop.infra.knowledge.parse import parse_document
+from octop.infra.knowledge.parse import parse_document_pages
 from octop.infra.knowledge.plane import open_knowledge_index
 
 logger = logging.getLogger(__name__)
@@ -50,13 +50,19 @@ def process_document(services: Any, kb_id: str, doc_id: str) -> None:
     repo.update_document(doc_id, status="processing", error_message="")
     try:
         path = KnowledgeBlobs.from_services(services).ensure_local(kb_id, doc_id, document.filename)
-        text = parse_document(path, ocr=optional_ocr_extractor(services))
+        pages = parse_document_pages(path, ocr=optional_ocr_extractor(services))
         knobs = get_advanced_settings(services.settings_repo.get)
-        chunks = chunk_text(text, size=knobs["chunk_size"], overlap=knobs["chunk_overlap"])
-        if not (text or "").strip() or not chunks:
+        chunks = chunk_pages(pages, size=knobs["chunk_size"], overlap=knobs["chunk_overlap"])
+        if not any(unit.text.strip() for unit in pages) or not chunks:
             raise ValueError("knowledge document has no extractable text")
-        embeddings = embed_knowledge_texts(services, chunks)
-        open_knowledge_index(services, kb_id).replace_doc_chunks(doc_id, chunks, embeddings)
+        embeddings = embed_knowledge_texts(services, [chunk.text for chunk in chunks])
+        open_knowledge_index(services, kb_id).replace_doc_chunks(
+            doc_id,
+            [chunk.text for chunk in chunks],
+            embeddings,
+            pages=[chunk.page for chunk in chunks],
+            anchors=[chunk.anchor for chunk in chunks],
+        )
         dimension = len(embeddings[0]) if embeddings else 0
         repo.update_document(doc_id, status="ready", error_message="", chunk_count=len(chunks))
         if dimension and base.embedding_dim != dimension:

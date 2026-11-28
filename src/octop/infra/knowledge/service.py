@@ -544,9 +544,11 @@ class KnowledgeService:
                 if chunks:
                     dest_index.replace_doc_chunks(
                         row.id,
-                        [text for text, _, _ in chunks],
-                        [embedding for _, embedding, _ in chunks],
-                        metadata=[meta for _, _, meta in chunks],
+                        [text for text, _, _, _, _ in chunks],
+                        [embedding for _, embedding, _, _, _ in chunks],
+                        metadata=[meta for _, _, meta, _, _ in chunks],
+                        pages=[page for _, _, _, page, _ in chunks],
+                        anchors=[anchor for _, _, _, _, anchor in chunks],
                     )
                 elif row.status != "failed":
                     reindex.append(row.id)

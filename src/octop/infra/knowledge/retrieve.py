@@ -211,13 +211,7 @@ def _format_context(
     )
     remaining = char_budget - len(fact_block)
     for base, hit, document in ranked:
-        citation = tr(
-            "knowledge.retrieval.citation",
-            locale,
-            name=base.name,
-            filename=document.filename,
-            ordinal=hit.ordinal + 1,
-        )
+        citation = _citation_text(base, hit, document, locale=locale)
         if remaining <= len(citation):
             break
         text = hit.text.strip()[: remaining - len(citation)]
@@ -231,6 +225,33 @@ def _format_context(
         return ""
     body = tr("knowledge.retrieval.preamble", locale) + "\n\n" + "\n\n".join(sections)
     return append_citations_marker(body + fact_block, citations_from_ranked(included))
+
+
+def _citation_text(base: Any, hit: Hit, document: Any, *, locale: str) -> str:
+    """Cite a passage by its strongest anchor: page, heading, or chunk order."""
+    if hit.page is not None:
+        return tr(
+            "knowledge.retrieval.citation_page",
+            locale,
+            name=base.name,
+            filename=document.filename,
+            page=hit.page,
+        )
+    if hit.anchor:
+        return tr(
+            "knowledge.retrieval.citation_anchor",
+            locale,
+            name=base.name,
+            filename=document.filename,
+            anchor=hit.anchor,
+        )
+    return tr(
+        "knowledge.retrieval.citation_chunk",
+        locale,
+        name=base.name,
+        filename=document.filename,
+        ordinal=hit.ordinal + 1,
+    )
 
 
 def _format_facts(facts: Sequence[str], *, limit: int, locale: str) -> str:

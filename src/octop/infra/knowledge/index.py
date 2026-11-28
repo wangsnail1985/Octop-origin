@@ -21,6 +21,8 @@ class Hit:
     text: str
     score: float
     metadata: dict[str, object]
+    page: int | None = None
+    anchor: str | None = None
 
 
 class KnowledgeIndex:
@@ -48,11 +50,23 @@ class KnowledgeIndex:
                     ordinal INTEGER NOT NULL,
                     text TEXT NOT NULL,
                     embedding BLOB NOT NULL,
-                    meta_json TEXT NOT NULL DEFAULT '{}'
+                    meta_json TEXT NOT NULL DEFAULT '{}',
+                    page INTEGER,
+                    anchor TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
                 """
             )
+            self._ensure_anchor_columns(conn)
+
+    @staticmethod
+    def _ensure_anchor_columns(conn: sqlite3.Connection) -> None:
+        """Add the anchor columns to sidecars written before they existed."""
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+        if "page" not in columns:
+            conn.execute("ALTER TABLE chunks ADD COLUMN page INTEGER")
+        if "anchor" not in columns:
+            conn.execute("ALTER TABLE chunks ADD COLUMN anchor TEXT")
 
     def replace_doc_chunks(
         self,
@@ -61,18 +75,26 @@ class KnowledgeIndex:
         embeddings: Sequence[Sequence[float]],
         *,
         metadata: Sequence[dict[str, object]] | None = None,
+        pages: Sequence[int | None] | None = None,
+        anchors: Sequence[str | None] | None = None,
     ) -> None:
         """Atomically replace all chunks belonging to one document."""
         if len(texts) != len(embeddings):
             raise ValueError("texts and embeddings must have the same length")
         if metadata is not None and len(metadata) != len(texts):
             raise ValueError("metadata and texts must have the same length")
-        rows: list[tuple[str, str, int, str, bytes, str]] = []
+        if pages is not None and len(pages) != len(texts):
+            raise ValueError("pages and texts must have the same length")
+        if anchors is not None and len(anchors) != len(texts):
+            raise ValueError("anchors and texts must have the same length")
+        rows: list[tuple[str, str, int, str, bytes, str, int | None, str | None]] = []
         for ordinal, (text, embedding) in enumerate(zip(texts, embeddings, strict=True)):
             vector = [float(value) for value in embedding]
             if not vector:
                 raise ValueError("embedding cannot be empty")
             meta = metadata[ordinal] if metadata is not None else {}
+            page = pages[ordinal] if pages is not None else None
+            anchor = anchors[ordinal] if anchors is not None else None
             rows.append(
                 (
                     f"{doc_id}:{ordinal}",
@@ -81,13 +103,15 @@ class KnowledgeIndex:
                     text,
                     struct.pack(f"<{len(vector)}f", *vector),
                     json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
+                    int(page) if page is not None else None,
+                    anchor,
                 )
             )
         with self._connect() as conn:
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             conn.executemany(
-                "INSERT INTO chunks(chunk_id, doc_id, ordinal, text, embedding, meta_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chunks(chunk_id, doc_id, ordinal, text, embedding, meta_json, "
+                "page, anchor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
 
@@ -100,21 +124,26 @@ class KnowledgeIndex:
             ).fetchall()
         return [(int(ordinal), str(text)) for ordinal, text in rows]
 
-    def read_doc_chunks(self, doc_id: str) -> list[tuple[str, list[float], dict[str, object]]]:
-        """Return one document's chunks as ``(text, embedding, metadata)``, in order."""
+    def read_doc_chunks(
+        self, doc_id: str
+    ) -> list[tuple[str, list[float], dict[str, object], int | None, str | None]]:
+        """Return one document's chunks as ``(text, embedding, metadata, page, anchor)``."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT text, embedding, meta_json FROM chunks WHERE doc_id = ? ORDER BY ordinal",
+                "SELECT text, embedding, meta_json, page, anchor FROM chunks "
+                "WHERE doc_id = ? ORDER BY ordinal",
                 (doc_id,),
             ).fetchall()
-        chunks: list[tuple[str, list[float], dict[str, object]]] = []
-        for text, blob, meta_json in rows:
+        chunks: list[tuple[str, list[float], dict[str, object], int | None, str | None]] = []
+        for text, blob, meta_json, page, anchor in rows:
             decoded = json.loads(meta_json)
             chunks.append(
                 (
                     str(text),
                     list(struct.unpack(f"<{len(blob) // 4}f", blob)),
                     decoded if isinstance(decoded, dict) else {},
+                    int(page) if page is not None else None,
+                    str(anchor) if anchor is not None else None,
                 )
             )
         return chunks
@@ -135,10 +164,11 @@ class KnowledgeIndex:
             raise ValueError("query vector cannot be zero")
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT chunk_id, doc_id, ordinal, text, embedding, meta_json FROM chunks"
+                "SELECT chunk_id, doc_id, ordinal, text, embedding, meta_json, page, anchor "
+                "FROM chunks"
             ).fetchall()
         hits: list[Hit] = []
-        for chunk_id, doc_id, ordinal, text, blob, meta_json in rows:
+        for chunk_id, doc_id, ordinal, text, blob, meta_json, page, anchor in rows:
             embedding = struct.unpack(f"<{len(blob) // 4}f", blob)
             if len(embedding) != len(query):
                 continue
@@ -157,6 +187,8 @@ class KnowledgeIndex:
                     text=text,
                     score=score,
                     metadata=decoded if isinstance(decoded, dict) else {},
+                    page=int(page) if page is not None else None,
+                    anchor=str(anchor) if anchor is not None else None,
                 )
             )
         return sorted(hits, key=lambda hit: hit.score, reverse=True)[:k]

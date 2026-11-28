@@ -56,10 +56,13 @@ class PgVectorKnowledgeIndex:
                     text TEXT NOT NULL,
                     embedding vector NOT NULL,
                     meta_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    page INTEGER,
+                    anchor TEXT,
                     PRIMARY KEY (kb_id, chunk_id)
                 )
                 """
             )
+            self._ensure_anchor_columns(conn)
             conn.execute(
                 f"""
                 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc
@@ -68,6 +71,20 @@ class PgVectorKnowledgeIndex:
             )
             conn.commit()
 
+    @staticmethod
+    def _ensure_anchor_columns(conn: Any) -> None:
+        """Add the anchor columns to tables written before they existed."""
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = %s AND column_name IN ('page', 'anchor')",
+            (KNOWLEDGE_CHUNKS,),
+        ).fetchall()
+        columns = {str(row[0]) for row in rows}
+        if "page" not in columns:
+            conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN page INTEGER")
+        if "anchor" not in columns:
+            conn.execute(f"ALTER TABLE {_TABLE} ADD COLUMN anchor TEXT")
+
     def replace_doc_chunks(
         self,
         doc_id: str,
@@ -75,11 +92,17 @@ class PgVectorKnowledgeIndex:
         embeddings: Sequence[Sequence[float]],
         *,
         metadata: Sequence[dict[str, object]] | None = None,
+        pages: Sequence[int | None] | None = None,
+        anchors: Sequence[str | None] | None = None,
     ) -> None:
         if len(texts) != len(embeddings):
             raise ValueError("texts and embeddings must have the same length")
         if metadata is not None and len(metadata) != len(texts):
             raise ValueError("metadata and texts must have the same length")
+        if pages is not None and len(pages) != len(texts):
+            raise ValueError("pages and texts must have the same length")
+        if anchors is not None and len(anchors) != len(texts):
+            raise ValueError("anchors and texts must have the same length")
         from psycopg.types.json import Jsonb
 
         rows: list[tuple[object, ...]] = []
@@ -88,6 +111,8 @@ class PgVectorKnowledgeIndex:
             if not vector:
                 raise ValueError("embedding cannot be empty")
             meta = metadata[ordinal] if metadata is not None else {}
+            page = pages[ordinal] if pages is not None else None
+            anchor = anchors[ordinal] if anchors is not None else None
             rows.append(
                 (
                     self._kb_id,
@@ -97,6 +122,8 @@ class PgVectorKnowledgeIndex:
                     text,
                     _vector_literal(vector),
                     Jsonb(meta),
+                    int(page) if page is not None else None,
+                    anchor,
                 )
             )
         with self._connect() as conn:
@@ -109,8 +136,9 @@ class PgVectorKnowledgeIndex:
                     cur.executemany(
                         f"""
                         INSERT INTO {_TABLE}
-                            (kb_id, chunk_id, doc_id, ordinal, text, embedding, meta_json)
-                        VALUES (%s, %s, %s, %s, %s, %s::vector, %s)
+                            (kb_id, chunk_id, doc_id, ordinal, text, embedding, meta_json,
+                             page, anchor)
+                        VALUES (%s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
                         """,
                         rows,
                     )
@@ -129,25 +157,29 @@ class PgVectorKnowledgeIndex:
             ).fetchall()
         return [(int(ordinal), str(text)) for ordinal, text in rows]
 
-    def read_doc_chunks(self, doc_id: str) -> list[tuple[str, list[float], dict[str, object]]]:
-        """Return one document's chunks as ``(text, embedding, metadata)``, in order."""
+    def read_doc_chunks(
+        self, doc_id: str
+    ) -> list[tuple[str, list[float], dict[str, object], int | None, str | None]]:
+        """Return one document's chunks as ``(text, embedding, metadata, page, anchor)``."""
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT text, embedding::text, meta_json FROM {_TABLE}
+                SELECT text, embedding::text, meta_json, page, anchor FROM {_TABLE}
                 WHERE kb_id = %s AND doc_id = %s
                 ORDER BY ordinal
                 """,
                 (self._kb_id, doc_id),
             ).fetchall()
-        chunks: list[tuple[str, list[float], dict[str, object]]] = []
-        for text, embedding, meta_json in rows:
+        chunks: list[tuple[str, list[float], dict[str, object], int | None, str | None]] = []
+        for text, embedding, meta_json, page, anchor in rows:
             decoded = json.loads(meta_json) if isinstance(meta_json, str) else meta_json
             chunks.append(
                 (
                     str(text),
                     [float(value) for value in json.loads(embedding)],
                     decoded if isinstance(decoded, dict) else {},
+                    int(page) if page is not None else None,
+                    str(anchor) if anchor is not None else None,
                 )
             )
         return chunks
@@ -180,7 +212,7 @@ class PgVectorKnowledgeIndex:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT chunk_id, doc_id, ordinal, text, meta_json,
+                SELECT chunk_id, doc_id, ordinal, text, meta_json, page, anchor,
                        1 - (embedding <=> %s::vector) AS score
                 FROM {_TABLE}
                 WHERE kb_id = %s
@@ -190,7 +222,7 @@ class PgVectorKnowledgeIndex:
                 (literal, self._kb_id, literal, k),
             ).fetchall()
         hits: list[Hit] = []
-        for chunk_id, doc_id, ordinal, text, meta_json, score in rows:
+        for chunk_id, doc_id, ordinal, text, meta_json, page, anchor, score in rows:
             decoded = meta_json
             if isinstance(decoded, str):
                 decoded = json.loads(decoded)
@@ -202,6 +234,8 @@ class PgVectorKnowledgeIndex:
                     text=str(text),
                     score=float(score),
                     metadata=decoded if isinstance(decoded, dict) else {},
+                    page=int(page) if page is not None else None,
+                    anchor=str(anchor) if anchor is not None else None,
                 )
             )
         return hits

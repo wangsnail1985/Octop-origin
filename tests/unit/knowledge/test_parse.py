@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from octop.infra.knowledge.parse import parse_document
+from octop.infra.knowledge.parse import parse_document, parse_document_pages
 
 _DOCX_NAMESPACES = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
@@ -28,13 +28,22 @@ def _docx_paragraph(text: str) -> str:
     return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
 
 
+def _docx_styled_paragraph(text: str, style_id: str) -> str:
+    return f'<w:p><w:pPr><w:pStyle w:val="{style_id}"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>'
+
+
 def _docx_with_body(
-    path: Path, body_xml: str, *, alt_chunk: tuple[str, str, bytes] | None = None
+    path: Path,
+    body_xml: str,
+    *,
+    alt_chunk: tuple[str, str, bytes] | None = None,
+    extra_styles: tuple[str, ...] = (),
 ) -> Path:
     """Write a .docx whose ``w:body`` holds *body_xml* verbatim.
 
     *alt_chunk* is ``(part_name, content_type, blob)`` for a part related as ``rId99``,
-    matching what converters emit for ``<w:altChunk r:id="rId99"/>``.
+    matching what converters emit for ``<w:altChunk r:id="rId99"/>``. *extra_styles*
+    appends ``<w:style>`` definitions to ``word/styles.xml``.
     """
     from docx import Document
 
@@ -47,6 +56,8 @@ def _docx_with_body(
         for name, data in entries:
             if name == "word/document.xml":
                 data = document
+            elif extra_styles and name == "word/styles.xml":
+                data = data.replace(b"</w:styles>", "".join(extra_styles).encode() + b"</w:styles>")
             elif alt_chunk is not None and name == "word/_rels/document.xml.rels":
                 relationship = _ALT_CHUNK_RELATIONSHIP.format(name=alt_chunk[0])
                 data = data.replace(
@@ -257,3 +268,199 @@ def test_parse_wps_raises_when_anydoc_returns_empty(
     )
     with pytest.raises(ValueError, match="failed to extract"):
         parse_document(path)
+
+
+# -- parse_document_pages: anchor extraction ----------------------------------
+
+
+def test_pages_markdown_headings_with_preamble_paragraph_zero(tmp_path: Path) -> None:
+    path = tmp_path / "readme.md"
+    path.write_text(
+        "intro before headings\n\n"
+        "# 1 Overview\n\nfirst\n\n"
+        "## 1.1 Scope\n\nscoped text\n\n"
+        "# 报销流程说明\n\ntail\n",
+        encoding="utf-8",
+    )
+
+    pages = parse_document_pages(path)
+
+    assert [(page.no, page.anchor) for page in pages] == [
+        (None, "¶0"),
+        (None, "§1 Overview"),
+        (None, "§1.1 Scope"),
+        (None, "§ 报销流程说明"),
+    ]
+    assert pages[0].text == "intro before headings"
+    assert pages[1].text == "# 1 Overview\n\nfirst"
+
+
+def test_pages_markdown_without_headings_is_one_unit(tmp_path: Path) -> None:
+    path = tmp_path / "plain.md"
+    path.write_text("only body text\n", encoding="utf-8")
+
+    pages = parse_document_pages(path)
+
+    assert [(page.no, page.anchor) for page in pages] == [(None, "¶1")]
+
+
+def test_pages_plain_text_groups_paragraphs(tmp_path: Path) -> None:
+    path = tmp_path / "notes.txt"
+    path.write_text("first para\n\nsecond para\n", encoding="utf-8")
+
+    pages = parse_document_pages(path)
+
+    assert [(page.anchor, page.text) for page in pages] == [
+        ("¶1", "first para"),
+        ("¶2", "second para"),
+    ]
+
+
+def test_pages_docx_heading_styles_and_toc_entries_skipped(tmp_path: Path) -> None:
+    body = (
+        _docx_paragraph("前言内容")
+        + _docx_styled_paragraph("第一章 总则", "Heading1")
+        + _docx_styled_paragraph("目录条目一", "TOC1")
+        + _docx_paragraph("第一条 为了规范")
+        + _docx_styled_paragraph("1.1 适用范围", "Heading2")
+        + _docx_paragraph("第二条 本办法适用于")
+    )
+    path = _docx_with_body(
+        tmp_path / "headings.docx",
+        body,
+        extra_styles=(
+            '<w:style w:type="paragraph" w:styleId="TOC1"><w:name w:val="toc 1"/></w:style>',
+        ),
+    )
+
+    pages = parse_document_pages(path)
+
+    assert [(page.no, page.anchor) for page in pages] == [
+        (None, "¶0"),
+        (None, "§ 第一章 总则"),
+        (None, "§1.1 适用范围"),
+    ]
+    assert "目录条目一" not in "\n".join(page.text for page in pages)
+    assert "第一条 为了规范" in pages[1].text
+    assert "第二条 本办法适用于" in pages[2].text
+
+
+def test_pages_pdf_numbers_pages_and_drops_empty_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "doc.pdf"
+    path.write_bytes(b"%PDF-fake")
+
+    class _FakePage:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class _FakeReader:
+        def __init__(self, _path: object) -> None:
+            self.pages = [_FakePage("page one"), _FakePage("  "), _FakePage("page three")]
+
+    monkeypatch.setattr("pypdf.PdfReader", _FakeReader)
+
+    pages = parse_document_pages(path)
+
+    assert [(page.no, page.anchor, page.text) for page in pages] == [
+        (1, None, "page one"),
+        (3, None, "page three"),
+    ]
+
+
+def test_pages_pptx_numbers_slides_and_merges_notes(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    presentation = Presentation()
+    first = presentation.slides.add_slide(presentation.slide_layouts[0])
+    assert first.shapes.title is not None
+    first.shapes.title.text = "First slide"
+    second = presentation.slides.add_slide(presentation.slide_layouts[0])
+    assert second.shapes.title is not None
+    second.shapes.title.text = "Second slide"
+    second.notes_slide.notes_text_frame.text = "speaker notes"
+    path = tmp_path / "slides.pptx"
+    presentation.save(path)
+
+    pages = parse_document_pages(path)
+
+    assert [(page.no, page.anchor) for page in pages] == [(1, None), (2, None)]
+    assert "speaker notes" in pages[1].text
+
+
+def test_pages_html_splits_on_heading_tags(tmp_path: Path) -> None:
+    path = tmp_path / "page.html"
+    path.write_text(
+        "<html><body><p>lead text</p><h1>1 Intro</h1><p>body</p>"
+        "<h2>1.1 Detail</h2><p>more</p></body></html>",
+        encoding="utf-8",
+    )
+
+    pages = parse_document_pages(path)
+
+    assert [(page.no, page.anchor) for page in pages] == [
+        (None, "¶0"),
+        (None, "§1 Intro"),
+        (None, "§1.1 Detail"),
+    ]
+    assert "body" in pages[1].text
+
+
+def test_pages_xlsx_splits_sheets_into_row_blocks(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.title = "Q1"
+    sheet.append(["name", "qty"])
+    sheet.append(["apple", 2])
+    extra = workbook.create_sheet("Q2")
+    extra.append(["name", "qty"])
+    extra.append(["pear", 3])
+    path = tmp_path / "sales.xlsx"
+    workbook.save(path)
+
+    pages = parse_document_pages(path)
+
+    assert [(page.anchor) for page in pages] == [
+        "§Q1 第1-2行",
+        "§Q2 第1-2行",
+    ]
+    assert pages[0].text.startswith("# Q1")
+
+
+def test_pages_csv_anchors_row_range(tmp_path: Path) -> None:
+    path = tmp_path / "sales.csv"
+    path.write_text("item,qty\napple,2\npear,3\n", encoding="utf-8")
+
+    pages = parse_document_pages(path)
+
+    assert [page.anchor for page in pages] == ["§sales 第1-3行"]
+    assert "pear" in pages[0].text
+
+
+def test_pages_json_splits_on_top_level_keys(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{"name":"octop","nested":{"ok":true}}', encoding="utf-8")
+
+    pages = parse_document_pages(path)
+
+    assert [page.anchor for page in pages] == ["¶1", "¶2"]
+    assert '"name"' in pages[0].text
+    assert '"nested"' in pages[1].text
+
+
+def test_pages_image_ocr_yields_single_anchored_unit(tmp_path: Path) -> None:
+    path = tmp_path / "scan.png"
+    path.write_bytes(b"png-bytes")
+
+    pages = parse_document_pages(path, ocr=lambda _p: "recognized text")
+
+    assert [(page.no, page.anchor, page.text) for page in pages] == [
+        (None, "¶1", "recognized text")
+    ]

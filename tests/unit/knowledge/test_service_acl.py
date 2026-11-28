@@ -442,7 +442,7 @@ def test_move_file_to_another_base_takes_its_original_and_chunks(
     assert blobs.read_bytes(target_id, doc.id, "readme.md") == b"x"
     assert not blobs.exists(kb_id, doc.id, "readme.md")
     assert KnowledgeIndex(target_id).read_doc_chunks(doc.id) == [
-        ("text of notes/readme.md", [1.0, 0.0], {})
+        ("text of notes/readme.md", [1.0, 0.0], {}, None, None)
     ]
     assert KnowledgeIndex(kb_id).list_doc_chunks(doc.id) == []
 

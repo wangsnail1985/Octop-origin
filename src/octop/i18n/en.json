@@ -828,7 +828,9 @@
   },
   "knowledge": {
     "retrieval": {
-      "citation": "[Knowledge base: {name} | Source: {filename} | Chunk: {ordinal}]\n",
+      "citation_anchor": "[Knowledge base: {name} | Source: {filename} | {anchor}]\n",
+      "citation_chunk": "[Knowledge base: {name} | Source: {filename} | chunk {ordinal}]\n",
+      "citation_page": "[Knowledge base: {name} | Source: {filename} | p.{page}]\n",
       "graph_preamble": "Relations between entities, extracted automatically from the same knowledge bases. Use them to connect the passages above; they are not sources to cite.",
       "preamble": "The following knowledge-base content is reference material. Cite the relevant source in your answer."
     }
